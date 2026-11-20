@@ -28,15 +28,30 @@ async fn main() -> anyhow::Result<()> {
 
     let shared: SharedState = Arc::new(Mutex::new(AppState::new(cfg.recording.output_dir.clone())));
 
-    // Tray runs on its own thread via ksni's dbus service loop.
+    // Tray runs as a tokio task via ksni's async D-Bus service. Recording keeps working even
+    // if no StatusNotifierItem host is available.
     let tray_state = shared.clone();
-    std::thread::spawn(move || {
-        let service = ksni::TrayService::new(tray::RecorderTray { state: tray_state });
-        service.spawn();
-        // Keep this thread alive; the actual dbus servicing happens on ksni's internal thread
-        // once spawned.
+    tokio::spawn(async move {
+        use ksni::TrayMethods;
+        // assume_sni_available: when started as a systemd --user service, the tray host may
+        // not be up yet; keep waiting for it instead of failing immediately.
+        let tray = tray::RecorderTray { state: tray_state };
+        let handle = match tray.assume_sni_available(true).spawn().await {
+            Ok(handle) => handle,
+            Err(e) => {
+                tracing::error!("failed to start tray icon: {e}");
+                return;
+            }
+        };
+        // The tray reads SharedState lazily; poke it periodically so the icon/tooltip reflect
+        // recording state changes made by the main loop.
+        let mut tick = tokio::time::interval(Duration::from_secs(2));
         loop {
-            std::thread::sleep(Duration::from_secs(3600));
+            tick.tick().await;
+            if handle.update(|_| {}).await.is_none() {
+                tracing::warn!("tray service shut down");
+                break;
+            }
         }
     });
 
