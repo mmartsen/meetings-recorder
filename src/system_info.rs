@@ -8,10 +8,26 @@ struct ToolCheck {
 }
 
 const TOOLS: &[ToolCheck] = &[
-    ToolCheck { binary: "pactl", required: true, used_for: "mic/app audio detection" },
-    ToolCheck { binary: "ffmpeg", required: true, used_for: "recording" },
-    ToolCheck { binary: "wmctrl", required: false, used_for: "browser-tab meeting detection (Meet/Slack/Teams web)" },
-    ToolCheck { binary: "curl", required: false, used_for: "Google Calendar cross-check" },
+    ToolCheck {
+        binary: "pactl",
+        required: true,
+        used_for: "mic/app audio detection",
+    },
+    ToolCheck {
+        binary: "ffmpeg",
+        required: true,
+        used_for: "recording",
+    },
+    ToolCheck {
+        binary: "wmctrl",
+        required: false,
+        used_for: "browser-tab meeting detection (Meet/Slack/Teams web)",
+    },
+    ToolCheck {
+        binary: "curl",
+        required: false,
+        used_for: "Google Calendar cross-check",
+    },
 ];
 
 fn which(binary: &str) -> bool {
@@ -63,7 +79,11 @@ pub fn log_system_info() {
     for tool in TOOLS {
         let present = which(tool.binary);
         if present {
-            tracing::info!("dependency check: '{}' found (used for: {})", tool.binary, tool.used_for);
+            tracing::info!(
+                "dependency check: '{}' found (used for: {})",
+                tool.binary,
+                tool.used_for
+            );
         } else if tool.required {
             tracing::warn!(
                 "dependency check: REQUIRED tool '{}' not found on PATH - {} will not work until it's installed",
@@ -79,7 +99,8 @@ pub fn log_system_info() {
         }
     }
 
-    let akonadi_running = which("akonadi_control") || std::path::Path::new(&akonadi_data_dir()).exists();
+    let akonadi_running =
+        which("akonadi_control") || std::path::Path::new(&akonadi_data_dir()).exists();
     tracing::info!(
         "Akonadi (KDE PIM storage) detected: {} - relevant only if calendar.provider = \"ics\" with auto_discover_kde = true",
         akonadi_running

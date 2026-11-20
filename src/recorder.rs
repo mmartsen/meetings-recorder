@@ -48,7 +48,10 @@ pub async fn start(cfg: &RecordingConfig, platform: Option<String>) -> Result<Ac
             // "both" - two inputs mixed with amix so you get one file with both sides audible.
             cmd.args(["-f", "pulse", "-i", "default"]);
             cmd.args(["-f", "pulse", "-i", "@DEFAULT_SINK@.monitor"]);
-            cmd.args(["-filter_complex", "amix=inputs=2:duration=longest:dropout_transition=2"]);
+            cmd.args([
+                "-filter_complex",
+                "amix=inputs=2:duration=longest:dropout_transition=2",
+            ]);
         }
     }
 
@@ -94,7 +97,12 @@ pub async fn start(cfg: &RecordingConfig, platform: Option<String>) -> Result<Ac
         });
     }
 
-    Ok(ActiveRecording { child, output_path, started_at, platform })
+    Ok(ActiveRecording {
+        child,
+        output_path,
+        started_at,
+        platform,
+    })
 }
 
 /// Stops the recording gracefully (SIGINT-equivalent via ffmpeg's stdin 'q' doesn't apply since

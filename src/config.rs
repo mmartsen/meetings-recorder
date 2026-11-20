@@ -123,20 +123,50 @@ impl Default for Config {
             },
             detection: DetectionConfig {
                 known_apps: vec![
-                    AppMatch { process_match: "discord".into(), platform: "Discord".into() },
-                    AppMatch { process_match: "teams".into(), platform: "MS Teams".into() },
-                    AppMatch { process_match: "slack".into(), platform: "Slack".into() },
-                    AppMatch { process_match: "zoom".into(), platform: "Zoom".into() },
-                    AppMatch { process_match: "skypeforlinux".into(), platform: "Skype".into() },
+                    AppMatch {
+                        process_match: "discord".into(),
+                        platform: "Discord".into(),
+                    },
+                    AppMatch {
+                        process_match: "teams".into(),
+                        platform: "MS Teams".into(),
+                    },
+                    AppMatch {
+                        process_match: "slack".into(),
+                        platform: "Slack".into(),
+                    },
+                    AppMatch {
+                        process_match: "zoom".into(),
+                        platform: "Zoom".into(),
+                    },
+                    AppMatch {
+                        process_match: "skypeforlinux".into(),
+                        platform: "Skype".into(),
+                    },
                 ],
                 browser_processes: vec![
-                    "chrome".into(), "chromium".into(), "firefox".into(), "brave".into(),
+                    "chrome".into(),
+                    "chromium".into(),
+                    "firefox".into(),
+                    "brave".into(),
                 ],
                 browser_meeting_titles: vec![
-                    TitleMatch { title_match: "meet.google.com".into(), platform: "Google Meet".into() },
-                    TitleMatch { title_match: " | meet".into(), platform: "Google Meet".into() },
-                    TitleMatch { title_match: "teams.microsoft.com".into(), platform: "MS Teams (web)".into() },
-                    TitleMatch { title_match: "app.slack.com".into(), platform: "Slack (huddle)".into() },
+                    TitleMatch {
+                        title_match: "meet.google.com".into(),
+                        platform: "Google Meet".into(),
+                    },
+                    TitleMatch {
+                        title_match: " | meet".into(),
+                        platform: "Google Meet".into(),
+                    },
+                    TitleMatch {
+                        title_match: "teams.microsoft.com".into(),
+                        platform: "MS Teams (web)".into(),
+                    },
+                    TitleMatch {
+                        title_match: "app.slack.com".into(),
+                        platform: "Slack (huddle)".into(),
+                    },
                 ],
                 min_duration_secs: 12,
                 confidence_threshold: 60,
@@ -153,7 +183,12 @@ impl Default for Config {
                     PipelineHook {
                         name: "whisper-transcribe (example, disabled)".into(),
                         command: "/usr/bin/whisper".into(),
-                        args: vec!["--model".into(), "base".into(), "--output_format".into(), "txt".into()],
+                        args: vec![
+                            "--model".into(),
+                            "base".into(),
+                            "--output_format".into(),
+                            "txt".into(),
+                        ],
                         required: false,
                     },
                 ],

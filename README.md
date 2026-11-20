@@ -169,3 +169,8 @@ src/
 packaging/
   meeting-recorder.service - example systemd --user unit
 ```
+
+## License
+
+Released into the public domain under [the Unlicense](LICENSE). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to report issues.

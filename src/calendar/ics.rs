@@ -13,7 +13,10 @@ struct ParsedEvent {
 /// (within `match_window_minutes`). Every I/O error along the way (missing file, unparsable
 /// event) is skipped rather than propagated - a calendar cross-check should degrade quietly,
 /// not break recording.
-pub fn current_event_title(cfg: &IcsCalendarConfig, match_window_minutes: i64) -> Result<Option<String>> {
+pub fn current_event_title(
+    cfg: &IcsCalendarConfig,
+    match_window_minutes: i64,
+) -> Result<Option<String>> {
     let window = Duration::minutes(match_window_minutes);
     let now = Local::now();
 
@@ -65,14 +68,24 @@ fn collect_ics_files(path: &Path, out: &mut Vec<PathBuf>) {
 /// calendar in KOrganizer for this tool to read, or use the `google` provider directly.
 fn discover_akonadi_ical_paths() -> Vec<PathBuf> {
     let mut found = Vec::new();
-    let Some(config_dir) = dirs::config_dir() else { return found };
-    let Ok(entries) = std::fs::read_dir(&config_dir) else { return found };
+    let Some(config_dir) = dirs::config_dir() else {
+        return found;
+    };
+    let Ok(entries) = std::fs::read_dir(&config_dir) else {
+        return found;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with("akonadi_ical_resource_") || name.starts_with("akonadi_icaldir_resource_") {
+        if name.starts_with("akonadi_ical_resource_")
+            || name.starts_with("akonadi_icaldir_resource_")
+        {
             let path = entry.path();
-            let rc_file = if path.is_dir() { path.join(format!("{name}rc")) } else { path };
+            let rc_file = if path.is_dir() {
+                path.join(format!("{name}rc"))
+            } else {
+                path
+            };
             if let Ok(text) = std::fs::read_to_string(&rc_file) {
                 for line in text.lines() {
                     if let Some(val) = line.strip_prefix("Path=") {
@@ -106,7 +119,11 @@ fn parse_events(text: &str) -> Vec<ParsedEvent> {
         } else if line == "END:VEVENT" {
             if in_event {
                 if let (Some(s), Some(e)) = (start, end) {
-                    events.push(ParsedEvent { summary: summary.clone(), start: s, end: e });
+                    events.push(ParsedEvent {
+                        summary: summary.clone(),
+                        start: s,
+                        end: e,
+                    });
                 }
             }
             in_event = false;
@@ -144,7 +161,10 @@ fn unfold(text: &str) -> String {
 }
 
 fn unescape(v: &str) -> String {
-    v.replace("\\,", ",").replace("\\;", ";").replace("\\n", " ").replace("\\\\", "\\")
+    v.replace("\\,", ",")
+        .replace("\\;", ";")
+        .replace("\\n", " ")
+        .replace("\\\\", "\\")
 }
 
 /// Parses DTSTART/DTEND values: UTC ("Z" suffix), floating/local naive datetimes, and
@@ -155,7 +175,9 @@ fn parse_datetime(key_part: &str, value: &str) -> Option<chrono::DateTime<Local>
     let value = value.trim();
     if key_part.contains("VALUE=DATE") && !key_part.contains("VALUE=DATE-TIME") {
         let date = NaiveDate::parse_from_str(value, "%Y%m%d").ok()?;
-        return Local.from_local_datetime(&date.and_hms_opt(0, 0, 0)?).single();
+        return Local
+            .from_local_datetime(&date.and_hms_opt(0, 0, 0)?)
+            .single();
     }
     if let Some(stripped) = value.strip_suffix('Z') {
         let naive = NaiveDateTime::parse_from_str(stripped, "%Y%m%dT%H%M%S").ok()?;
@@ -181,6 +203,9 @@ mod tests {
     fn unfolds_continuation_lines() {
         let ics = "BEGIN:VEVENT\r\nSUMMARY:Long meeting \r\n title continued\r\nDTSTART:20260101T090000Z\r\nDTEND:20260101T093000Z\r\nEND:VEVENT\r\n";
         let events = parse_events(ics);
-        assert_eq!(events[0].summary.as_deref(), Some("Long meeting title continued"));
+        assert_eq!(
+            events[0].summary.as_deref(),
+            Some("Long meeting title continued")
+        );
     }
 }

@@ -2,6 +2,7 @@
 name = "meeting-recorder"
 version = "0.1.0"
 edition = "2021"
+license = "Unlicense"
 description = "Auto-detects and records meetings (Discord, Meet, Teams, Slack) on Linux, with a pluggable post-processing pipeline and optional Google Calendar cross-check."
 
 [dependencies]

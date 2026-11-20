@@ -86,9 +86,10 @@ async fn main() -> anyhow::Result<()> {
 
         if should_record && active.is_none() {
             tracing::info!(
-                "starting recording, detected platform = {:?} (confidence {})",
+                "starting recording, detected platform = {:?} (confidence {}, reasons: {})",
                 detection.platform,
-                detection.confidence
+                detection.confidence,
+                detection.reasons.join("; ")
             );
             match recorder::start(&cfg.recording, detection.platform.clone()).await {
                 Ok(rec) => {
@@ -97,7 +98,10 @@ async fn main() -> anyhow::Result<()> {
                             .summary("Meeting recording started")
                             .body(&format!(
                                 "Platform: {}",
-                                detection.platform.clone().unwrap_or_else(|| "unknown".into())
+                                detection
+                                    .platform
+                                    .clone()
+                                    .unwrap_or_else(|| "unknown".into())
                             ))
                             .show();
                     }
@@ -119,7 +123,9 @@ async fn main() -> anyhow::Result<()> {
                     let duration = (ended_at - started_at).num_seconds();
 
                     let calendar_title = if cfg.calendar.provider != "none" {
-                        calendar::current_event_title(&cfg.calendar).await.unwrap_or(None)
+                        calendar::current_event_title(&cfg.calendar)
+                            .await
+                            .unwrap_or(None)
                     } else {
                         None
                     };

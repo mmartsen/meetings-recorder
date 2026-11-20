@@ -31,9 +31,17 @@ struct EventTime {
 /// Runs curl and returns stdout as a String. Using curl (rather than an HTTP client crate)
 /// keeps this app's dependency tree small - this backend only needs two simple JSON requests.
 async fn curl(args: &[&str]) -> Result<String> {
-    let out = Command::new("curl").args(args).output().await.context("spawning curl")?;
+    let out = Command::new("curl")
+        .args(args)
+        .output()
+        .await
+        .context("spawning curl")?;
     if !out.status.success() {
-        bail!("curl exited with {}: {}", out.status, String::from_utf8_lossy(&out.stderr));
+        bail!(
+            "curl exited with {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
@@ -57,11 +65,15 @@ async fn get_access_token(cfg: &GoogleCalendarConfig) -> Result<String> {
         "grant_type=refresh_token",
     ])
     .await?;
-    let resp: TokenResponse = serde_json::from_str(&body).context("parsing Google OAuth token response")?;
+    let resp: TokenResponse =
+        serde_json::from_str(&body).context("parsing Google OAuth token response")?;
     Ok(resp.access_token)
 }
 
-pub async fn current_event_title(cfg: &GoogleCalendarConfig, match_window_minutes: i64) -> Result<Option<String>> {
+pub async fn current_event_title(
+    cfg: &GoogleCalendarConfig,
+    match_window_minutes: i64,
+) -> Result<Option<String>> {
     if cfg.refresh_token.is_empty() {
         return Ok(None);
     }
@@ -77,7 +89,8 @@ pub async fn current_event_title(cfg: &GoogleCalendarConfig, match_window_minute
         urlencode(&time_max)
     );
     let body = curl(&["-s", "-H", &format!("Authorization: Bearer {token}"), &url]).await?;
-    let resp: EventsResponse = serde_json::from_str(&body).context("parsing Google Calendar events response")?;
+    let resp: EventsResponse =
+        serde_json::from_str(&body).context("parsing Google Calendar events response")?;
 
     let now_local = Local::now();
     for event in resp.items {

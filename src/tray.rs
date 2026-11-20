@@ -31,7 +31,12 @@ impl Tray for RecorderTray {
     fn tool_tip(&self) -> ToolTip {
         let st = self.state.lock().unwrap();
         let desc = if st.recording {
-            format!("Recording ({})", st.current_platform.clone().unwrap_or_else(|| "unknown".into()))
+            format!(
+                "Recording ({})",
+                st.current_platform
+                    .clone()
+                    .unwrap_or_else(|| "unknown".into())
+            )
         } else {
             "Idle - watching for meetings".to_string()
         };
@@ -48,7 +53,9 @@ impl Tray for RecorderTray {
         let status_label = if st.recording {
             format!(
                 "\u{25CF} Recording \u{2014} {}",
-                st.current_platform.clone().unwrap_or_else(|| "unknown platform".into())
+                st.current_platform
+                    .clone()
+                    .unwrap_or_else(|| "unknown platform".into())
             )
         } else {
             "\u{25CB} Idle \u{2014} watching for meetings".to_string()
@@ -60,12 +67,26 @@ impl Tray for RecorderTray {
             today_secs / 60,
             today_secs % 60
         );
-        let force_label = if st.recording { "Force stop recording" } else { "Force start recording" };
+        let force_label = if st.recording {
+            "Force stop recording"
+        } else {
+            "Force start recording"
+        };
         drop(st);
 
         vec![
-            StandardItem { label: status_label, enabled: false, ..Default::default() }.into(),
-            StandardItem { label: today_label, enabled: false, ..Default::default() }.into(),
+            StandardItem {
+                label: status_label,
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: today_label,
+                enabled: false,
+                ..Default::default()
+            }
+            .into(),
             MenuItem::Separator,
             StandardItem {
                 label: force_label.to_string(),

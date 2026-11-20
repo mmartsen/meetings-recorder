@@ -55,7 +55,8 @@ impl StatsLog {
     /// Returns (count, total_duration_secs) for today.
     pub fn today_summary(&self) -> (usize, i64) {
         let today = Local::now().date_naive();
-        let todays: Vec<&RecordingLogEntry> = self.entries.iter().filter(|e| e.date == today).collect();
+        let todays: Vec<&RecordingLogEntry> =
+            self.entries.iter().filter(|e| e.date == today).collect();
         let total: i64 = todays.iter().map(|e| e.duration_secs).sum();
         (todays.len(), total)
     }

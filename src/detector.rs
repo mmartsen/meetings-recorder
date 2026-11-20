@@ -20,7 +20,11 @@ pub fn detect(snapshot: &AudioSnapshot, cfg: &DetectionConfig) -> Detection {
 
     let mic_active = !snapshot.mic_users.is_empty();
     if !mic_active {
-        return Detection { platform: None, confidence: 0, reasons: vec!["mic inactive".into()] };
+        return Detection {
+            platform: None,
+            confidence: 0,
+            reasons: vec!["mic inactive".into()],
+        };
     }
     confidence += 20;
     reasons.push("microphone active".into());
@@ -68,7 +72,10 @@ pub fn detect(snapshot: &AudioSnapshot, cfg: &DetectionConfig) -> Detection {
                     if lower.contains(&tm.title_match.to_lowercase()) {
                         platform = Some(tm.platform.clone());
                         confidence += 40;
-                        reasons.push(format!("window title matched '{}' ({})", tm.title_match, tm.platform));
+                        reasons.push(format!(
+                            "window title matched '{}' ({})",
+                            tm.title_match, tm.platform
+                        ));
                     }
                 }
             }
@@ -91,5 +98,6 @@ pub fn detect(snapshot: &AudioSnapshot, cfg: &DetectionConfig) -> Detection {
 
 fn matches_app(stream: &crate::audio::StreamInfo, needle: &str) -> bool {
     let needle = needle.to_lowercase();
-    stream.app_name.to_lowercase().contains(&needle) || stream.app_binary.to_lowercase().contains(&needle)
+    stream.app_name.to_lowercase().contains(&needle)
+        || stream.app_binary.to_lowercase().contains(&needle)
 }

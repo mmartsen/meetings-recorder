@@ -9,7 +9,6 @@ use tokio::sync::mpsc;
 /// or an app currently outputting sound).
 #[derive(Debug, Clone)]
 pub struct StreamInfo {
-    pub index: String,
     pub app_name: String,
     pub app_binary: String,
 }
@@ -40,19 +39,29 @@ fn parse_pactl_list(text: &str) -> Vec<StreamInfo> {
     let mut cur_index: Option<String> = None;
     let mut props: HashMap<String, String> = HashMap::new();
 
-    let flush = |index: &Option<String>, props: &HashMap<String, String>, out: &mut Vec<StreamInfo>| {
-        if let Some(idx) = index {
-            let app_name = props.get("application.name").cloned().unwrap_or_default();
-            let app_binary = props.get("application.process.binary").cloned().unwrap_or_default();
-            if !app_name.is_empty() || !app_binary.is_empty() {
-                out.push(StreamInfo { index: idx.clone(), app_name, app_binary });
+    let flush =
+        |index: &Option<String>, props: &HashMap<String, String>, out: &mut Vec<StreamInfo>| {
+            if index.is_some() {
+                let app_name = props.get("application.name").cloned().unwrap_or_default();
+                let app_binary = props
+                    .get("application.process.binary")
+                    .cloned()
+                    .unwrap_or_default();
+                if !app_name.is_empty() || !app_binary.is_empty() {
+                    out.push(StreamInfo {
+                        app_name,
+                        app_binary,
+                    });
+                }
             }
-        }
-    };
+        };
 
     for line in text.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Source Output #").or_else(|| trimmed.strip_prefix("Sink Input #")) {
+        if let Some(rest) = trimmed
+            .strip_prefix("Source Output #")
+            .or_else(|| trimmed.strip_prefix("Sink Input #"))
+        {
             flush(&cur_index, &props, &mut result);
             cur_index = Some(rest.to_string());
             props.clear();
@@ -89,7 +98,10 @@ pub async fn watch(tx: mpsc::Sender<AudioEvent>) -> Result<()> {
         .spawn()
         .context("spawning `pactl subscribe` - is pactl on PATH?")?;
 
-    let stdout = child.stdout.take().context("no stdout from pactl subscribe")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("no stdout from pactl subscribe")?;
     let mut lines = BufReader::new(stdout).lines();
 
     while let Some(line) = lines.next_line().await? {
