@@ -1,0 +1,14 @@
+[Unit]
+Description=Meeting Recorder (auto-detect and record meetings)
+After=graphical-session.target pipewire.service pulseaudio.service
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.cargo/bin/meeting-recorder-not-installed-adjust-this-path
+# ^ Replace with the actual path, e.g. /home/you/.local/bin/meeting-recorder
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=graphical-session.target

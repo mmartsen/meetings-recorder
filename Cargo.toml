@@ -1,0 +1,25 @@
+[package]
+name = "meeting-recorder"
+version = "0.1.0"
+edition = "2021"
+description = "Auto-detects and records meetings (Discord, Meet, Teams, Slack) on Linux, with a pluggable post-processing pipeline and optional Google Calendar cross-check."
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+ksni = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.7"
+chrono = { version = "0.4", features = ["serde"] }
+notify-rust = "=4.10.0"
+anyhow = "1"
+regex = "1"
+dirs = "5"
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[[bin]]
+name = "meeting-recorder"
+path = "src/main.rs"
+

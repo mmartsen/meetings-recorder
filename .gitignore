@@ -1,0 +1,5 @@
+/target
+Cargo.lock
+
+# Claude Code project context (local only)
+.claude/CLAUDE.md
