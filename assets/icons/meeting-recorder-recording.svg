@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Meeting Recorder, recording: red speech bubble with a solid record dot. -->
+  <path d="M6 2.5H18A4 4 0 0 1 22 6.5V13.5A4 4 0 0 1 18 17.5H11.5L6.5 21.5V17.5H6A4 4 0 0 1 2 13.5V6.5A4 4 0 0 1 6 2.5Z" fill="#da4453"/>
+  <circle cx="12" cy="10" r="4" fill="#ffffff"/>
+  <circle cx="12" cy="10" r="2.2" fill="#da4453"/>
+</svg>

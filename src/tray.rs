@@ -16,16 +16,14 @@ impl Tray for RecorderTray {
     }
 
     fn icon_name(&self) -> String {
-        let recording = self.state.lock().unwrap().recording;
-        if recording {
-            "media-record".into()
-        } else {
-            "audio-input-microphone".into()
-        }
+        // Empty on purpose: hosts prefer a theme name over pixmaps, and theme lookup of our
+        // custom icon is unreliable (see icons::tray_pixmaps).
+        String::new()
     }
 
     fn icon_pixmap(&self) -> Vec<Icon> {
-        Vec::new() // rely on icon_name / theme icons; keeps this dependency-light
+        let recording = self.state.lock().unwrap().recording;
+        crate::icons::tray_pixmaps(recording)
     }
 
     fn tool_tip(&self) -> ToolTip {
@@ -129,7 +127,12 @@ impl Tray for RecorderTray {
             StandardItem {
                 label: "Quit".into(),
                 activate: Box::new(|_: &mut RecorderTray| {
-                    std::process::exit(0);
+                    // Route through the SIGTERM handler in main so an active recording is
+                    // finalized instead of cut off.
+                    tracing::info!("quit requested from tray");
+                    unsafe {
+                        libc::kill(libc::getpid(), libc::SIGTERM);
+                    }
                 }),
                 ..Default::default()
             }

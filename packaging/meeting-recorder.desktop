@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Meeting Recorder
+Comment=Auto-detect and record meetings
+# Adjust to wherever the binary is installed (same path as ExecStart in the systemd unit).
+Exec=meeting-recorder
+Icon=meeting-recorder
+Terminal=false
+Categories=AudioVideo;Audio;Recorder;
+# Lets Plasma/GNOME attribute notifications to this app (history, per-app settings).
+X-GNOME-UsesNotifications=true
+StartupNotify=false

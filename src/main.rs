@@ -2,6 +2,7 @@ mod audio;
 mod calendar;
 mod config;
 mod detector;
+mod icons;
 mod logging;
 mod pipeline;
 mod recorder;
@@ -28,6 +29,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     system_info::log_system_info();
+    icons::install();
 
     let cfg = Config::load_or_create()?;
     tracing::info!("loaded config, output dir = {:?}", cfg.recording.output_dir);
@@ -95,8 +97,16 @@ async fn main() -> anyhow::Result<()> {
     let mut suppressed_logged = false;
     let mut snapshot_failing = false;
 
+    // systemd stop/restart, logout and the tray's Quit all arrive as SIGTERM/SIGINT. Finish an
+    // active recording properly (metadata, hooks, stats) instead of dying mid-file.
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+
     loop {
         let trigger = tokio::select! {
+            _ = sigterm.recv() => "SIGTERM",
+            _ = sigint.recv() => "SIGINT",
             ev = rx.recv(), if events_open => {
                 if ev.is_none() {
                     // Shouldn't happen (watch_forever loops), but never spin on a closed channel.
@@ -107,6 +117,16 @@ async fn main() -> anyhow::Result<()> {
             }
             _ = poll.tick() => "poll",
         };
+
+        if trigger == "SIGTERM" || trigger == "SIGINT" {
+            tracing::info!("received {trigger}, shutting down");
+            if let Some(rec) = active.take() {
+                tracing::info!("finalizing active recording before exit");
+                finish_recording(&cfg, &shared, rec).await;
+            }
+            tracing::info!("shutdown complete");
+            return Ok(());
+        }
 
         let force = shared.lock().unwrap().force_override;
         if force != last_force {
@@ -354,11 +374,19 @@ async fn finish_recording(cfg: &Config, shared: &SharedState, rec: ActiveRecordi
     }
 }
 
+/// Must match the installed `.desktop` file's basename (packaging/meeting-recorder.desktop).
+/// Plasma only keeps notifications in its history (and lists the app in per-app notification
+/// settings) when it can resolve the sender to a desktop entry.
+const DESKTOP_ENTRY: &str = "meeting-recorder";
+
 /// Desktop notification via the async API. The blocking `.show()` must NOT be used here:
 /// ksni pulls in zbus's tokio integration, so notify-rust's blocking call does a `block_on`
 /// inside the tokio runtime and panics ("Cannot start a runtime from within a runtime").
 async fn notify(summary: &str, body: &str) {
     if let Err(e) = notify_rust::Notification::new()
+        .appname("Meeting Recorder")
+        .icon(icons::IDLE)
+        .hint(notify_rust::Hint::DesktopEntry(DESKTOP_ENTRY.into()))
         .summary(summary)
         .body(body)
         .show_async()

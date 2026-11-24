@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icons/meeting-recorder.svg" alt="Meeting Recorder icon" width="96" height="96">
+</p>
+
 # meeting-recorder
 
 A Linux tray app that watches your system audio, automatically detects when you're in a real
@@ -13,8 +17,10 @@ diarization, upload, whatever you want) that runs as external commands you confi
   which app is talking.
 - **Platform detection**: matches the app name/binary against a configurable list
   (Discord, Teams, Slack, Zoom, Skype). For browser-based calls (Google Meet, Slack huddles,
-  Teams web) it additionally checks the active window title via `wmctrl` for things like
-  `meet.google.com`.
+  Teams web) it matches the tab title against `browser_meeting_titles`. The title comes from
+  the browser's own audio stream (`media.name`, e.g. `Meet - Weekly sync`), which works on
+  Wayland too. Window titles from `wmctrl` are also checked, but on Wayland it only sees
+  XWayland windows.
 - **Meeting vs. noise**: a confidence score (0-100) built from independent signals — mic active,
   known app producing audio, browser meeting-tab title, sustained duration — so a 2-second
   notification ping doesn't trigger a recording. Tunable via `confidence_threshold` and
@@ -26,15 +32,20 @@ diarization, upload, whatever you want) that runs as external commands you confi
   `<command> <args...> <audio_file> <metadata.json>`. This is intentionally *not* baked into the
   Rust code — wire in Whisper, a diarizer, a summarizer, an auto-uploader, or your own script,
   entirely outside this codebase.
-- **Tray icon**: shows recording status live, lets you force start/stop (overriding automatic
-  detection until toggled again), shows today's recording count/duration, and gives quick access
-  to the config file and recordings folder.
+- **Tray icon**: a blue speech bubble when idle, red while recording. The menu shows today's
+  recording count and duration, lets you force start/stop, and opens the config file or
+  recordings folder. Note that force start/stop pins that state and turns off automatic
+  detection until you click it again (or restart the app).
+- **Notifications**: a desktop notification when a recording starts and when it's saved
+  (`general.notify_on_start_stop`). With the `.desktop` file installed, Plasma keeps them in
+  its notification history and lists "Meeting Recorder" in its per-app notification settings.
+- **Clean shutdown**: stopping or restarting the service, logging out, or Quit from the tray
+  finishes an active recording properly (file finalized, metadata written, hooks run) before
+  exiting.
 - **Startup system-info log**: on every launch, logs your session type (Wayland/X11), desktop
   environment (`XDG_CURRENT_DESKTOP`), and whether each external tool it depends on (`pactl`,
   `ffmpeg`, `wmctrl`, `curl`) is actually present on `PATH` — so a missing dependency shows up
-  immediately in the logs instead of as a silent failure later. It also notes when running under
-  Wayland that `wmctrl`-based browser-tab detection typically only sees XWayland windows (native
-  Wayland apps aren't affected — that detection path is independent, via `pactl`).
+  immediately in the logs instead of as a silent failure later.
 
 ## Calendar backends
 
@@ -75,41 +86,86 @@ Set `calendar.provider` in the config to one of:
 The app only ever calls the read-only `events.list` endpoint on your primary calendar, to look
 for an event whose time window currently overlaps "now".
 
-## Build
+## Install
 
-Requires Rust (install via [rustup](https://rustup.rs), not your distro's apt package — this
-project targets current Cargo/edition-2021 dependency versions).
+### 1. System dependencies
+
+- `pactl`: from `pipewire-pulse` (or `pulseaudio-utils` on PulseAudio systems). Required.
+- `ffmpeg`, built with PulseAudio input support (the default on Arch/Manjaro, Fedora, Debian,
+  Ubuntu). Required.
+- `wmctrl`: optional; window-title matching on X11. Browser meetings are detected without it.
+- `curl`: only if you use the Google Calendar cross-check.
+- A StatusNotifierItem tray host. KDE Plasma and most desktops have one built in; stock GNOME
+  needs the "AppIndicator and KStatusNotifierItem Support" extension.
+
+To build you also need Rust from [rustup](https://rustup.rs). Distro packages are often too
+old. No system libraries are needed to build; all dependencies are pure Rust.
+
+```bash
+# Arch / Manjaro
+sudo pacman -S --needed pipewire-pulse ffmpeg wmctrl
+# Debian / Ubuntu
+sudo apt install pipewire-pulse ffmpeg wmctrl
+# Fedora (ffmpeg from RPM Fusion, or the stock ffmpeg-free package)
+sudo dnf install pipewire-pulseaudio ffmpeg-free wmctrl
+```
+
+### 2. Build and install
+
+```bash
+./install.sh
+```
+
+This builds a release binary and installs, for your user only (no root):
+
+| What | Where |
+|---|---|
+| binary | `~/.local/bin/meeting-recorder` |
+| desktop entry | `~/.local/share/applications/meeting-recorder.desktop` |
+| systemd user service (enabled + started) | `~/.config/systemd/user/meeting-recorder.service` |
+
+The app installs its own icons into `~/.local/share/icons/hicolor/scalable/apps/` on startup.
+Change the binary location with `BIN_DIR=~/bin ./install.sh`. Other flags:
+
+- `--no-service`: skip the systemd unit, if you'd rather start it some other way
+  (e.g. KDE Autostart).
+- `--no-build`: install an existing `target/release/meeting-recorder` without rebuilding.
+- `--uninstall`: remove everything above. Your config, recordings, stats and logs are kept.
+
+**Updating**: `git pull && ./install.sh`. Restarting during a call is safe: the current
+recording is finished and saved first, and a new one starts once the call is detected again.
+The call still ends up split across two files.
+
+### Manual install
 
 ```bash
 cargo build --release
-# binary at target/release/meeting-recorder
-```
-
-System dependencies (install via your package manager):
-- `pulseaudio-utils` or `pipewire-pulse` (provides `pactl`)
-- `ffmpeg`
-- `wmctrl` (optional, improves browser-based meeting detection)
-- `curl` (only needed if Google Calendar cross-check is enabled)
-- A StatusNotifierItem tray host — GNOME (with an extension like "AppIndicator and KStatusNotifierItem
-  Support"), KDE Plasma, or most other DEs. Tray icons are a DE-level feature outside this app's
-  control; if your tray doesn't show it, that's the compositor/DE, not this binary.
-
-## Running
-
-```bash
-./target/release/meeting-recorder
-```
-
-On first run it writes a default config to `~/.config/meeting-recorder/config.toml` and starts
-watching. Recordings land in `~/Recordings/meetings/` by default.
-
-To run it automatically at login as a background service, see `packaging/meeting-recorder.service`
-(a user-level systemd unit) — copy it to `~/.config/systemd/user/` and:
-
-```bash
+install -Dm755 target/release/meeting-recorder ~/.local/bin/meeting-recorder
+cp packaging/meeting-recorder.desktop ~/.local/share/applications/   # set Exec= to the binary path
+cp packaging/meeting-recorder.service ~/.config/systemd/user/        # set ExecStart= if not ~/.local/bin
 systemctl --user daemon-reload
 systemctl --user enable --now meeting-recorder.service
 ```
+
+Install the desktop entry even if you never launch it from the menu. Plasma only keeps an
+app's notifications in its history when it can match them to an installed `.desktop` file.
+
+## Running
+
+As a service (after `./install.sh`):
+
+```bash
+systemctl --user status meeting-recorder
+systemctl --user restart meeting-recorder
+journalctl --user -u meeting-recorder -f
+```
+
+Or run the binary in a terminal: `~/.local/bin/meeting-recorder` (stop the service first, or
+two copies will both record).
+
+On first run it writes a default config to `~/.config/meeting-recorder/config.toml` and starts
+watching. Recordings land in `~/Recordings/meetings/` by default, each with a `.json` metadata
+file next to it.
 
 ## Logs
 
@@ -157,6 +213,21 @@ Edit `~/.config/meeting-recorder/config.toml`. Key sections:
 - `[calendar]` — set `provider = "ics"` (for KDE/local calendars) or `"google"`, plus the
   matching `[calendar.ics]` or `[calendar.google]` sub-table. See "Calendar backends" above.
 
+## Troubleshooting
+
+- **A call wasn't recorded.** Check the log for that time:
+  `grep -E "detection changed|candidate|starting|stopping|WARN|ERROR" ~/.local/state/meeting-recorder/logs/meeting-recorder.$(date +%F).log`.
+  Each `detection changed` line shows the confidence score, why it was given, and which
+  streams were active. A browser call stuck around 35 means the tab title didn't match any
+  `browser_meeting_titles` entry; add a substring of the tab title (shown in the line as
+  `Firefox[firefox]{"..."}`). Also check for a `suppressed by a force-stop override` warning.
+- **No tray icon.** On GNOME, install the AppIndicator extension. Otherwise run the binary in
+  a terminal and look for `tray icon service started` or a tray error.
+- **Notifications aren't kept in history / no app icon on them.** Install the desktop entry
+  (`./install.sh` does it) and log out and back in, or run `kbuildsycoca6` on KDE.
+- **Empty or very short files.** Look for `ffmpeg exited ... wrote N bytes` and `ffmpeg:`
+  warnings in the log. Make sure `ffmpeg -f pulse -i default -t 3 /tmp/t.opus` works.
+
 ## Notes on consent
 
 Recording calls can have legal implications depending on your jurisdiction (some places require
@@ -183,9 +254,20 @@ src/
   stats.rs       - daily recording stats, persisted to ~/.local/share/meeting-recorder/stats.json
   state.rs       - shared app state (Arc<Mutex<..>>) used by both the tray and main loop
   tray.rs        - ksni system tray icon/menu
+  icons.rs       - bundled icons: tray pixmaps, SVGs installed to ~/.local/share/icons
   config.rs      - TOML config schema + defaults
+assets/icons/    - idle / recording icons: SVG sources + PNG renders for the tray
 packaging/
-  meeting-recorder.service - example systemd --user unit
+  meeting-recorder.service - systemd --user unit (installed by install.sh)
+  meeting-recorder.desktop - desktop entry (installed by install.sh)
+install.sh       - build + per-user install / update / uninstall
+```
+
+The tray PNGs are rendered from the SVGs. After editing an SVG, regenerate them:
+
+```bash
+for n in meeting-recorder meeting-recorder-recording; do for sz in 22 32 48 64; do
+  rsvg-convert -w $sz -h $sz assets/icons/$n.svg -o assets/icons/png/$n-$sz.png; done; done
 ```
 
 ## License
