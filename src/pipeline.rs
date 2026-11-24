@@ -36,7 +36,12 @@ pub async fn run_hooks(cfg: &PipelineConfig, audio_file: &Path, metadata_file: &
         return;
     }
     for hook in &cfg.hooks {
-        tracing::info!("running pipeline hook '{}'", hook.name);
+        tracing::info!(
+            "running pipeline hook '{}' on {:?}",
+            hook.name,
+            audio_file.file_name().unwrap_or_default()
+        );
+        let started = std::time::Instant::now();
         let result = Command::new(&hook.command)
             .args(&hook.args)
             .arg(audio_file)
@@ -46,11 +51,21 @@ pub async fn run_hooks(cfg: &PipelineConfig, audio_file: &Path, metadata_file: &
 
         match result {
             Ok(out) if out.status.success() => {
-                tracing::info!("hook '{}' completed", hook.name);
+                tracing::info!(
+                    "hook '{}' completed in {}s",
+                    hook.name,
+                    started.elapsed().as_secs()
+                );
             }
             Ok(out) => {
                 let msg = String::from_utf8_lossy(&out.stderr);
-                tracing::warn!("hook '{}' exited non-zero: {}", hook.name, msg);
+                tracing::warn!(
+                    "hook '{}' exited non-zero ({}) after {}s: {}",
+                    hook.name,
+                    out.status,
+                    started.elapsed().as_secs(),
+                    msg.trim()
+                );
                 if hook.required {
                     break;
                 }

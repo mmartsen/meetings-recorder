@@ -347,7 +347,16 @@ async fn finish_recording(cfg: &Config, shared: &SharedState, rec: ActiveRecordi
         audio_file: path.clone(),
     };
     match pipeline::write_metadata(&path, &meta) {
-        Ok(meta_path) => pipeline::run_hooks(&cfg.pipeline, &path, &meta_path).await,
+        Ok(meta_path) if cfg.pipeline.enabled => {
+            // Run hooks in the background: transcription can take longer than the meeting,
+            // and the detection loop must keep watching for the next call meanwhile.
+            let pipeline_cfg = cfg.pipeline.clone();
+            let audio = path.clone();
+            tokio::spawn(async move {
+                pipeline::run_hooks(&pipeline_cfg, &audio, &meta_path).await;
+            });
+        }
+        Ok(_) => {}
         Err(e) => tracing::error!("failed to write metadata for {:?}: {e:#}", path),
     }
 

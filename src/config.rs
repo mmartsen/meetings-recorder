@@ -184,16 +184,16 @@ impl Default for Config {
             pipeline: PipelineConfig {
                 enabled: false,
                 hooks: vec![
-                    // Disabled example showing how a user would wire in local Whisper.
+                    // Example (pipeline is disabled by default): Whisper transcription via the
+                    // wrapper script ./install.sh installs. See README "Transcription with
+                    // Whisper".
                     PipelineHook {
-                        name: "whisper-transcribe (example, disabled)".into(),
-                        command: "/usr/bin/whisper".into(),
-                        args: vec![
-                            "--model".into(),
-                            "base".into(),
-                            "--output_format".into(),
-                            "txt".into(),
-                        ],
+                        name: "whisper-transcribe".into(),
+                        command: default_hooks_dir()
+                            .join("whisper-transcribe.sh")
+                            .to_string_lossy()
+                            .into_owned(),
+                        args: vec!["--model".into(), "base".into()],
                         required: false,
                     },
                 ],
@@ -213,6 +213,14 @@ impl Default for Config {
             },
         }
     }
+}
+
+/// Where ./install.sh puts the bundled hook scripts (examples/hooks/).
+fn default_hooks_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("meeting-recorder")
+        .join("hooks")
 }
 
 fn default_output_dir() -> PathBuf {

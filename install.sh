@@ -3,6 +3,7 @@
 #   - binary        -> $BIN_DIR/meeting-recorder           (default ~/.local/bin)
 #   - desktop entry -> $APP_DIR/meeting-recorder.desktop   (default ~/.local/share/applications)
 #   - systemd unit  -> $UNIT_DIR/meeting-recorder.service  (default ~/.config/systemd/user)
+#   - hook scripts  -> ~/.local/share/meeting-recorder/hooks/ (e.g. whisper-transcribe.sh)
 # then enables and (re)starts the service. Re-run it to update: restarting is safe, an active
 # recording is finalized before the old process exits.
 #
@@ -17,6 +18,7 @@ BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 APP_DIR="${APP_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/applications}"
 UNIT_DIR="${UNIT_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user}"
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/scalable/apps"
+HOOK_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/meeting-recorder/hooks"
 
 build=1
 service=1
@@ -26,7 +28,7 @@ for arg in "$@"; do
     --no-build) build=0 ;;
     --no-service) service=0 ;;
     --uninstall) uninstall=1 ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "unknown option: $arg (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -44,7 +46,8 @@ if [[ $uninstall == 1 ]]; then
   fi
   rm -fv "$UNIT_DIR/meeting-recorder.service" "$APP_DIR/meeting-recorder.desktop" \
     "$BIN_DIR/meeting-recorder" "$ICON_DIR/meeting-recorder.svg" \
-    "$ICON_DIR/meeting-recorder-recording.svg"
+    "$ICON_DIR/meeting-recorder-recording.svg" "$HOOK_DIR/whisper-transcribe.sh"
+  rmdir "$HOOK_DIR" 2>/dev/null || true
   if have systemctl; then systemctl --user daemon-reload || true; fi
   refresh_desktop_db
   echo "Uninstalled. Config (~/.config/meeting-recorder), recordings, stats and logs were kept."
@@ -68,6 +71,10 @@ mkdir -p "$BIN_DIR" "$APP_DIR"
 install -m 755 target/release/meeting-recorder "$BIN_DIR/.meeting-recorder.new"
 mv -f "$BIN_DIR/.meeting-recorder.new" "$BIN_DIR/meeting-recorder"
 echo "installed $BIN_DIR/meeting-recorder"
+
+mkdir -p "$HOOK_DIR"
+install -m 755 examples/hooks/whisper-transcribe.sh "$HOOK_DIR/whisper-transcribe.sh"
+echo "installed $HOOK_DIR/whisper-transcribe.sh"
 
 sed "s|^Exec=.*|Exec=$BIN_DIR/meeting-recorder|" packaging/meeting-recorder.desktop \
   > "$APP_DIR/meeting-recorder.desktop"

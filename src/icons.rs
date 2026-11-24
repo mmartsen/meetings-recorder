@@ -59,12 +59,16 @@ fn decode(bytes: &[u8]) -> Option<ksni::Icon> {
     // SNI wants ARGB32 in network byte order: A, R, G, B per pixel.
     let data: Vec<u8> = match info.color_type {
         png::ColorType::Rgba => px
-            .chunks_exact(4)
-            .flat_map(|p| [p[3], p[0], p[1], p[2]])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b, a]| [a, r, g, b])
             .collect(),
         png::ColorType::Rgb => px
-            .chunks_exact(3)
-            .flat_map(|p| [255, p[0], p[1], p[2]])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|&[r, g, b]| [255, r, g, b])
             .collect(),
         other => {
             tracing::error!("bundled icon has unsupported color type {other:?}");

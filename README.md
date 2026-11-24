@@ -31,7 +31,8 @@ diarization, upload, whatever you want) that runs as external commands you confi
 - **Pipeline hooks (optional)**: after a recording finishes, each configured hook is run as
   `<command> <args...> <audio_file> <metadata.json>`. This is intentionally *not* baked into the
   Rust code — wire in Whisper, a diarizer, a summarizer, an auto-uploader, or your own script,
-  entirely outside this codebase.
+  entirely outside this codebase. A ready-made Whisper transcription hook is included (see
+  [Transcription with Whisper](#transcription-with-whisper)).
 - **Tray icon**: a blue speech bubble when idle, red while recording. The menu shows today's
   recording count and duration, lets you force start/stop, and opens the config file or
   recordings folder. Note that force start/stop pins that state and turns off automatic
@@ -123,6 +124,7 @@ This builds a release binary and installs, for your user only (no root):
 | binary | `~/.local/bin/meeting-recorder` |
 | desktop entry | `~/.local/share/applications/meeting-recorder.desktop` |
 | systemd user service (enabled + started) | `~/.config/systemd/user/meeting-recorder.service` |
+| pipeline hook scripts | `~/.local/share/meeting-recorder/hooks/` (e.g. `whisper-transcribe.sh`) |
 
 The app installs its own icons into `~/.local/share/icons/hicolor/scalable/apps/` on startup.
 Change the binary location with `BIN_DIR=~/bin ./install.sh`. Other flags:
@@ -192,26 +194,133 @@ Edit `~/.config/meeting-recorder/config.toml`. Key sections:
   (`browser_meeting_titles`), confidence threshold, minimum duration.
 - `[recording]` — output directory, capture mode (`mic` / `call_audio` / `both`), format
   (`opus` / `mp3`).
-- `[pipeline]` — set `enabled = true` and add hooks. Example Whisper hook:
-
-  ```toml
-  [pipeline]
-  enabled = true
-
-  [[pipeline.hooks]]
-  name = "whisper-transcribe"
-  command = "/usr/bin/whisper"
-  args = ["--model", "base", "--output_format", "txt", "--output_dir", "/home/you/Recordings/meetings"]
-  required = false
-  ```
-
-  Whisper (or any hook) receives the recording's audio file path and its metadata JSON
-  (platform, start/end time, confidence, matched calendar event if any) as its last two
-  arguments, so you can build arbitrarily complex downstream pipelines (transcription →
-  summarization → Notion upload, etc.) without touching this codebase.
+- `[pipeline]` — commands to run after each recording, e.g. transcription. See
+  [Post-processing pipeline](#post-processing-pipeline) and
+  [Transcription with Whisper](#transcription-with-whisper) below.
 
 - `[calendar]` — set `provider = "ics"` (for KDE/local calendars) or `"google"`, plus the
   matching `[calendar.ics]` or `[calendar.google]` sub-table. See "Calendar backends" above.
+
+## Post-processing pipeline
+
+After each recording is saved, every hook in `[pipeline]` runs in order as:
+
+```
+<command> <args...> <audio_file> <metadata_json>
+```
+
+- `metadata_json` is the `.json` file next to the recording: start/end time, duration,
+  platform, detection confidence, and the matched calendar event title if any.
+- Hooks run in the background, so a long transcription doesn't stop the next meeting from
+  being detected and recorded.
+- A hook that fails or can't be started is logged with its stderr. If it has
+  `required = true`, the hooks after it are skipped for that recording.
+- Each hook's start, duration and exit status are in the log (`grep hook` in the log file).
+- Hooks are killed if the app stops mid-run (service restart, logout). Re-run them by hand
+  on the recording if needed.
+- Because hooks run in order, later hooks can use earlier hooks' output (e.g. a summarizer
+  that reads the `.txt` transcript).
+
+## Transcription with Whisper
+
+`install.sh` installs a ready-made hook,
+`~/.local/share/meeting-recorder/hooks/whisper-transcribe.sh`
+([source](examples/hooks/whisper-transcribe.sh)). It writes the transcript next to the
+recording:
+
+```
+2026-11-24_12-49-51_Google-Meet.opus
+2026-11-24_12-49-51_Google-Meet.opus.json
+2026-11-24_12-49-51_Google-Meet.txt     <- plain transcript
+2026-11-24_12-49-51_Google-Meet.srt     <- with timestamps
+```
+
+It works with whichever of these three Whisper implementations you have installed.
+
+### 1. Install a Whisper implementation
+
+Pick one:
+
+| Implementation | Good for | Install |
+|---|---|---|
+| **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** (recommended) | Fast on CPU, no Python. GPU builds (CUDA, Vulkan) available. | AUR `whisper.cpp`, or build from source (below) |
+| **[faster-whisper](https://github.com/Softcatala/whisper-ctranslate2)** | Fast, Python-based, NVIDIA GPU via CUDA | `pipx install whisper-ctranslate2` |
+| **[openai-whisper](https://github.com/openai/whisper)** | The reference implementation. Slowest on CPU, large PyTorch install | `pipx install openai-whisper` |
+
+**whisper.cpp from source** (any distro; needs `git`, `cmake` and a C++ compiler):
+
+```bash
+git clone https://github.com/ggml-org/whisper.cpp
+cd whisper.cpp
+cmake -B build && cmake --build build -j --config Release
+install -m755 build/bin/whisper-cli ~/.local/bin/
+```
+
+whisper.cpp also needs a model file, which the hook looks for in
+`~/.local/share/whisper.cpp/models/` (override with `WHISPER_CPP_MODELS`, or pass a full path
+as `--model`):
+
+```bash
+mkdir -p ~/.local/share/whisper.cpp/models
+curl -L -o ~/.local/share/whisper.cpp/models/ggml-base.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+```
+
+faster-whisper and openai-whisper download models automatically the first time they're used.
+
+The hook finds the binary on `PATH`. The systemd service's `PATH` may not include
+`~/.local/bin`, so if the log says `no Whisper found on PATH`, add
+`Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin` to
+`~/.config/systemd/user/meeting-recorder.service` and run `systemctl --user daemon-reload`.
+
+### 2. Enable the hook
+
+In `~/.config/meeting-recorder/config.toml`:
+
+```toml
+[pipeline]
+enabled = true
+
+[[pipeline.hooks]]
+name = "whisper-transcribe"
+command = "/home/you/.local/share/meeting-recorder/hooks/whisper-transcribe.sh"
+args = ["--model", "small", "--language", "en"]
+required = false
+```
+
+`command` must be an absolute path (no `~`). Then `systemctl --user restart meeting-recorder`.
+Config files created by a recent version already contain this hook, disabled; just set
+`enabled = true`.
+
+Hook options (in `args`):
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--backend` | `auto` | `whisper.cpp`, `faster-whisper` or `openai`; `auto` uses the first one installed, in that order |
+| `--model` | `base` | `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`; `.en` variants (e.g. `small.en`) are faster and more accurate for English-only calls |
+| `--language` | `auto` | spoken language code (`en`, `uk`, `de`...). Setting it avoids wrong auto-detection on calls that start quietly or in another language |
+| `--threads` | all cores | CPU threads |
+| `--formats` | `txt,srt` | any of `txt,srt,vtt,json` |
+| `--min-seconds` | `10` | skip recordings shorter than this |
+
+Choosing a model: `base` is fast and fine for clear English. `small` is a good default for
+meetings. `medium` and `large-v3-turbo` are noticeably better with accents, crosstalk and
+non-English speech, but much slower on CPU; use them if you have a GPU. Only one
+transcription runs at a time; if two calls end close together, the second waits.
+
+### 3. Test it
+
+Run the hook by hand on an existing recording. It's the same command the app runs:
+
+```bash
+~/.local/share/meeting-recorder/hooks/whisper-transcribe.sh --model small \
+  ~/Recordings/meetings/<recording>.opus ~/Recordings/meetings/<recording>.opus.json
+```
+
+After the next real call, check the log for
+`running pipeline hook 'whisper-transcribe'` and `hook 'whisper-transcribe' completed in Ns`.
+If it failed, the log line includes the script's error message (missing model, Whisper not
+on `PATH`, etc.).
 
 ## Troubleshooting
 
@@ -261,6 +370,8 @@ packaging/
   meeting-recorder.service - systemd --user unit (installed by install.sh)
   meeting-recorder.desktop - desktop entry (installed by install.sh)
 install.sh       - build + per-user install / update / uninstall
+examples/hooks/
+  whisper-transcribe.sh    - Whisper transcription hook (whisper.cpp / faster-whisper / openai)
 ```
 
 The tray PNGs are rendered from the SVGs. After editing an SVG, regenerate them:

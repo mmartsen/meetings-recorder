@@ -38,8 +38,10 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Lint install script
-        run: bash -n install.sh && shellcheck install.sh
+      - name: Lint shell scripts
+        run: |
+          bash -n install.sh examples/hooks/*.sh
+          shellcheck install.sh examples/hooks/*.sh
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
