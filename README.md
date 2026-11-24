@@ -31,8 +31,9 @@ diarization, upload, whatever you want) that runs as external commands you confi
 - **Pipeline hooks (optional)**: after a recording finishes, each configured hook is run as
   `<command> <args...> <audio_file> <metadata.json>`. This is intentionally *not* baked into the
   Rust code — wire in Whisper, a diarizer, a summarizer, an auto-uploader, or your own script,
-  entirely outside this codebase. A ready-made Whisper transcription hook is included (see
-  [Transcription with Whisper](#transcription-with-whisper)).
+  entirely outside this codebase. Ready-made transcription hooks are included, for local Whisper
+  and for cloud APIs (see [Transcription with Whisper](#transcription-with-whisper) and
+  [Transcription with a cloud API](#transcription-with-a-cloud-api)).
 - **Tray icon**: a blue speech bubble when idle, red while recording. The menu shows today's
   recording count and duration, lets you force start/stop, and opens the config file or
   recordings folder. Note that force start/stop pins that state and turns off automatic
@@ -124,7 +125,7 @@ This builds a release binary and installs, for your user only (no root):
 | binary | `~/.local/bin/meeting-recorder` |
 | desktop entry | `~/.local/share/applications/meeting-recorder.desktop` |
 | systemd user service (enabled + started) | `~/.config/systemd/user/meeting-recorder.service` |
-| pipeline hook scripts | `~/.local/share/meeting-recorder/hooks/` (e.g. `whisper-transcribe.sh`) |
+| pipeline hook scripts | `~/.local/share/meeting-recorder/hooks/` (`whisper-transcribe.sh`, `cloud-transcribe.sh`) |
 
 The app installs its own icons into `~/.local/share/icons/hicolor/scalable/apps/` on startup.
 Change the binary location with `BIN_DIR=~/bin ./install.sh`. Other flags:
@@ -195,8 +196,9 @@ Edit `~/.config/meeting-recorder/config.toml`. Key sections:
 - `[recording]` — output directory, capture mode (`mic` / `call_audio` / `both`), format
   (`opus` / `mp3`).
 - `[pipeline]` — commands to run after each recording, e.g. transcription. See
-  [Post-processing pipeline](#post-processing-pipeline) and
-  [Transcription with Whisper](#transcription-with-whisper) below.
+  [Post-processing pipeline](#post-processing-pipeline),
+  [Transcription with Whisper](#transcription-with-whisper) and
+  [Transcription with a cloud API](#transcription-with-a-cloud-api) below.
 
 - `[calendar]` — set `provider = "ics"` (for KDE/local calendars) or `"google"`, plus the
   matching `[calendar.ics]` or `[calendar.google]` sub-table. See "Calendar backends" above.
@@ -322,6 +324,98 @@ After the next real call, check the log for
 If it failed, the log line includes the script's error message (missing model, Whisper not
 on `PATH`, etc.).
 
+## Transcription with a cloud API
+
+If you'd rather not run Whisper locally, `install.sh` also installs
+`~/.local/share/meeting-recorder/hooks/cloud-transcribe.sh`
+([source](examples/hooks/cloud-transcribe.sh)). It sends the recording to a cloud
+speech-to-text API and writes `<recording>.txt` next to it. It uses only `curl` and `ffmpeg`
+(plus `jq` or `python3` to read the response).
+
+> **Privacy:** this uploads the audio of everyone on the call to a third party. Make sure the
+> other participants are OK with that, and check the provider's data retention and training
+> policy. Local Whisper (above) keeps everything on your machine.
+
+### Supported providers
+
+It works with any provider that offers an OpenAI-compatible `/audio/transcriptions` endpoint:
+
+| `--provider` | Default model | Other models | API key from |
+|---|---|---|---|
+| `openai` | `gpt-transcribe` | `whisper-1` (older, deprecated) | [platform.openai.com](https://platform.openai.com/api-keys) |
+| `groq` | `whisper-large-v3-turbo` (fast, cheap) | `whisper-large-v3` (more accurate) | [console.groq.com](https://console.groq.com/keys) |
+| `custom` | set `--model` | anything the server offers | depends on the server |
+
+`custom` with `--base-url` covers other OpenAI-compatible services and self-hosted servers
+(e.g. a Whisper server on another machine in your network). Model names and prices change;
+check the provider's docs.
+
+Claude and most chat LLMs can't take audio input, so they can't do the transcription step.
+They are good at the next step: summarizing the `.txt` transcript. Add that as another hook
+after the transcription hook.
+
+### 1. Store the API key
+
+Put the key in a file only you can read. Don't put it in `config.toml`, because hook
+arguments are visible in `ps`:
+
+```bash
+install -m 600 /dev/null ~/.config/meeting-recorder/openai.key   # or groq.key, custom.key
+$EDITOR ~/.config/meeting-recorder/openai.key                     # paste the key, save
+```
+
+The script reads `~/.config/meeting-recorder/<provider>.key` by default (override with
+`--api-key-file`). Without a key file it falls back to `OPENAI_API_KEY`, `GROQ_API_KEY` or
+`TRANSCRIBE_API_KEY` in the service's environment. The key is passed to `curl` through a
+private temporary file, never on the command line.
+
+### 2. Enable the hook
+
+```toml
+[pipeline]
+enabled = true
+
+[[pipeline.hooks]]
+name = "cloud-transcribe"
+command = "/home/you/.local/share/meeting-recorder/hooks/cloud-transcribe.sh"
+args = ["--provider", "groq", "--language", "en"]
+required = false
+```
+
+Then `systemctl --user restart meeting-recorder`. Use either this hook or the local Whisper
+hook, not both, unless you want two transcripts.
+
+Hook options (in `args`):
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--provider` | `openai` | `openai`, `groq` or `custom` |
+| `--model` | per provider | see the table above |
+| `--base-url` | per provider | API base URL; required for `custom` (e.g. `http://192.168.1.10:8000/v1`) |
+| `--api-key-file` | `~/.config/meeting-recorder/<provider>.key` | file containing only the key |
+| `--language` | `auto` | spoken language code (`en`, `uk`, `de`...). Setting it improves accuracy |
+| `--prompt` | none | names and jargon to help spelling, e.g. `"Kubernetes, PostgreSQL, Anna Kowalski"` |
+| `--chunk-minutes` | `20` | split the audio into pieces of this length (`0` = don't split) |
+| `--min-seconds` | `10` | skip recordings shorter than this |
+
+**Upload size limits.** OpenAI and Groq's free tier accept at most 25 MB per request. The
+script re-encodes the audio to 16 kHz mono Opus (speech doesn't need more), which is roughly
+10–15 MB per hour, and uploads it in 20-minute chunks. Any length of meeting works, and each
+request stays small. The transcripts of the chunks are joined in order. A sentence that
+crosses a chunk boundary may be split or slightly garbled; raise `--chunk-minutes` if that
+bothers you.
+
+### 3. Test it
+
+```bash
+~/.local/share/meeting-recorder/hooks/cloud-transcribe.sh --provider groq \
+  ~/Recordings/meetings/<recording>.opus ~/Recordings/meetings/<recording>.opus.json
+```
+
+API errors (wrong key, quota, unsupported model) are printed by the script and show up in
+the meeting-recorder log as `hook 'cloud-transcribe' exited non-zero ...: <error>`. A failed
+run never overwrites an existing transcript.
+
 ## Troubleshooting
 
 - **A call wasn't recorded.** Check the log for that time:
@@ -371,7 +465,8 @@ packaging/
   meeting-recorder.desktop - desktop entry (installed by install.sh)
 install.sh       - build + per-user install / update / uninstall
 examples/hooks/
-  whisper-transcribe.sh    - Whisper transcription hook (whisper.cpp / faster-whisper / openai)
+  whisper-transcribe.sh    - local Whisper transcription hook (whisper.cpp / faster-whisper / openai)
+  cloud-transcribe.sh      - cloud transcription hook (OpenAI / Groq / any OpenAI-compatible API)
 ```
 
 The tray PNGs are rendered from the SVGs. After editing an SVG, regenerate them:
