@@ -54,28 +54,37 @@ pub fn detect(snapshot: &AudioSnapshot, cfg: &DetectionConfig) -> Detection {
         }
     }
 
-    // Signal 2: a browser is the audio source/sink AND its window title looks like a meeting.
+    // Signal 2: a browser is the audio source/sink AND its tab looks like a meeting. The tab
+    // title comes from the browser's own audio stream (`media.name`, works on Wayland) plus
+    // window titles from wmctrl (X11/XWayland only).
     if platform.is_none() {
-        let browser_active = snapshot
+        let browser_streams: Vec<&crate::audio::StreamInfo> = snapshot
             .mic_users
             .iter()
             .chain(snapshot.audio_producers.iter())
-            .any(|s| cfg.browser_processes.iter().any(|b| matches_app(s, b)));
+            .filter(|s| cfg.browser_processes.iter().any(|b| matches_app(s, b)))
+            .collect();
 
-        if browser_active {
+        if !browser_streams.is_empty() {
             confidence += 10;
             reasons.push("browser is using audio".into());
-            let titles = window::all_window_titles();
-            for title in &titles {
+            let mut titles: Vec<String> = browser_streams
+                .iter()
+                .map(|s| s.media_name.clone())
+                .filter(|t| !t.is_empty())
+                .collect();
+            titles.extend(window::all_window_titles());
+            'outer: for title in &titles {
                 let lower = title.to_lowercase();
                 for tm in &cfg.browser_meeting_titles {
                     if lower.contains(&tm.title_match.to_lowercase()) {
                         platform = Some(tm.platform.clone());
                         confidence += 40;
                         reasons.push(format!(
-                            "window title matched '{}' ({})",
-                            tm.title_match, tm.platform
+                            "title {:?} matched '{}' ({})",
+                            title, tm.title_match, tm.platform
                         ));
+                        break 'outer;
                     }
                 }
             }
@@ -100,4 +109,43 @@ fn matches_app(stream: &crate::audio::StreamInfo, needle: &str) -> bool {
     let needle = needle.to_lowercase();
     stream.app_name.to_lowercase().contains(&needle)
         || stream.app_binary.to_lowercase().contains(&needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::{AudioSnapshot, StreamInfo};
+    use crate::config::Config;
+
+    fn ff(media: &str) -> StreamInfo {
+        StreamInfo {
+            app_name: "Firefox".into(),
+            app_binary: "firefox".into(),
+            media_name: media.into(),
+            pid: None,
+        }
+    }
+
+    #[test]
+    fn detects_meet_from_browser_stream_media_name() {
+        let cfg = Config::default().detection;
+        let snap = AudioSnapshot {
+            mic_users: vec![ff("Meet - Finance & Data Catch up")],
+            audio_producers: vec![ff("Meet - Finance & Data Catch up")],
+        };
+        let d = detect(&snap, &cfg);
+        assert_eq!(d.platform.as_deref(), Some("Google Meet"));
+        assert!(d.confidence >= cfg.confidence_threshold, "{d:?}");
+    }
+
+    #[test]
+    fn browser_without_meeting_tab_stays_below_threshold() {
+        let cfg = Config::default().detection;
+        let snap = AudioSnapshot {
+            mic_users: vec![ff("YouTube")],
+            audio_producers: vec![ff("YouTube")],
+        };
+        let d = detect(&snap, &cfg);
+        assert!(d.confidence < cfg.confidence_threshold, "{d:?}");
+    }
 }

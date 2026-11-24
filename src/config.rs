@@ -159,6 +159,11 @@ impl Default for Config {
                         title_match: " | meet".into(),
                         platform: "Google Meet".into(),
                     },
+                    // Firefox/Chrome tab title for an active call: "Meet - <meeting name>".
+                    TitleMatch {
+                        title_match: "meet - ".into(),
+                        platform: "Google Meet".into(),
+                    },
                     TitleMatch {
                         title_match: "teams.microsoft.com".into(),
                         platform: "MS Teams (web)".into(),

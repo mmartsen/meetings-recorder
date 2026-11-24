@@ -2,6 +2,7 @@ mod audio;
 mod calendar;
 mod config;
 mod detector;
+mod logging;
 mod pipeline;
 mod recorder;
 mod state;
@@ -19,12 +20,31 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    let _log_guard = logging::init();
+    tracing::info!(
+        "meeting-recorder {} starting (pid {})",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id()
+    );
 
     system_info::log_system_info();
 
     let cfg = Config::load_or_create()?;
     tracing::info!("loaded config, output dir = {:?}", cfg.recording.output_dir);
+    tracing::info!(
+        "detection: threshold={} min_duration={}s poll={}s known_apps=[{}] browsers=[{}] calendar={}",
+        cfg.detection.confidence_threshold,
+        cfg.detection.min_duration_secs,
+        cfg.general.poll_interval_secs,
+        cfg.detection
+            .known_apps
+            .iter()
+            .map(|a| format!("{}={}", a.process_match, a.platform))
+            .collect::<Vec<_>>()
+            .join(", "),
+        cfg.detection.browser_processes.join(", "),
+        cfg.calendar.provider,
+    );
 
     let shared: SharedState = Arc::new(Mutex::new(AppState::new(cfg.recording.output_dir.clone())));
 
@@ -37,7 +57,10 @@ async fn main() -> anyhow::Result<()> {
         // not be up yet; keep waiting for it instead of failing immediately.
         let tray = tray::RecorderTray { state: tray_state };
         let handle = match tray.assume_sni_available(true).spawn().await {
-            Ok(handle) => handle,
+            Ok(handle) => {
+                tracing::info!("tray icon service started");
+                handle
+            }
             Err(e) => {
                 tracing::error!("failed to start tray icon: {e}");
                 return;
@@ -55,45 +78,143 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Audio change events, pushed by `pactl subscribe`.
+    // Audio change events, pushed by `pactl subscribe` (restarted automatically if it dies).
     let (tx, mut rx) = mpsc::channel(16);
-    let _watch_handle = tokio::spawn(async move {
-        if let Err(e) = audio::watch(tx).await {
-            tracing::error!("audio watcher exited: {e:#}");
-        }
-    });
+    tokio::spawn(audio::watch_forever(tx));
 
     let mut active: Option<ActiveRecording> = None;
     let mut meeting_since: Option<std::time::Instant> = None;
     let mut poll = tokio::time::interval(Duration::from_secs(cfg.general.poll_interval_secs));
+    let mut events_open = true;
+
+    // Previous-iteration values, used to log only on *changes* at info level so the log stays
+    // readable over days while still recording every decision that matters.
+    let mut last_snapshot: Option<audio::AudioSnapshot> = None;
+    let mut last_decision: Option<(Option<String>, u8)> = None;
+    let mut last_force: Option<bool> = None;
+    let mut suppressed_logged = false;
+    let mut snapshot_failing = false;
 
     loop {
-        tokio::select! {
-            _ = rx.recv() => {}
-            _ = poll.tick() => {}
-        }
+        let trigger = tokio::select! {
+            ev = rx.recv(), if events_open => {
+                if ev.is_none() {
+                    // Shouldn't happen (watch_forever loops), but never spin on a closed channel.
+                    tracing::error!("audio event channel closed; falling back to polling only");
+                    events_open = false;
+                }
+                "pactl-event"
+            }
+            _ = poll.tick() => "poll",
+        };
 
         let force = shared.lock().unwrap().force_override;
+        if force != last_force {
+            tracing::info!("force override changed: {:?} -> {:?}", last_force, force);
+            last_force = force;
+            suppressed_logged = false;
+        }
 
-        let snapshot = match audio::snapshot() {
-            Ok(s) => s,
+        // Detect ffmpeg dying underneath us; otherwise we'd sit "recording" nothing forever.
+        if let Some(rec) = active.as_mut() {
+            if let Some(status) = recorder::exited_early(rec) {
+                tracing::error!(
+                    "ffmpeg exited unexpectedly ({status}) while recording {:?}; finalizing",
+                    rec.output_path
+                );
+                let rec = active.take().unwrap();
+                finish_recording(&cfg, &shared, rec).await;
+                meeting_since = None;
+            }
+        }
+
+        let snapshot = match tokio::task::spawn_blocking(audio::snapshot).await {
+            Ok(Ok(s)) => {
+                if snapshot_failing {
+                    tracing::info!("audio snapshot recovered");
+                    snapshot_failing = false;
+                }
+                s
+            }
+            Ok(Err(e)) => {
+                // Log the first failure at warn, then only at debug until it recovers.
+                if !snapshot_failing {
+                    tracing::warn!("failed to read audio snapshot: {e:#}");
+                    snapshot_failing = true;
+                } else {
+                    tracing::debug!("audio snapshot still failing: {e:#}");
+                }
+                continue;
+            }
             Err(e) => {
-                tracing::warn!("failed to read audio snapshot: {e:#}");
+                tracing::error!("audio snapshot task panicked: {e}");
                 continue;
             }
         };
+        if last_snapshot.as_ref() != Some(&snapshot) {
+            tracing::debug!("audio streams changed ({trigger}): {snapshot}");
+            last_snapshot = Some(snapshot.clone());
+        }
+
         let detection = detector::detect(&snapshot, &cfg.detection);
+        let above = detection.confidence >= cfg.detection.confidence_threshold;
+        tracing::trace!(
+            "tick ({trigger}): confidence={} platform={:?} reasons=[{}]",
+            detection.confidence,
+            detection.platform,
+            detection.reasons.join("; ")
+        );
+
+        let decision = (detection.platform.clone(), detection.confidence);
+        if last_decision.as_ref() != Some(&decision) {
+            tracing::info!(
+                "detection changed: platform={:?} confidence={} (threshold {}) -> {} | reasons: [{}] | {}",
+                detection.platform,
+                detection.confidence,
+                cfg.detection.confidence_threshold,
+                if above { "MEETING" } else { "no meeting" },
+                detection.reasons.join("; "),
+                snapshot
+            );
+            last_decision = Some(decision);
+        }
 
         let should_record = match force {
-            Some(v) => v,
+            Some(v) => {
+                if !v && above && active.is_none() && !suppressed_logged {
+                    tracing::warn!(
+                        "meeting detected ({:?}, confidence {}) but auto-recording is suppressed by a force-stop override from the tray",
+                        detection.platform,
+                        detection.confidence
+                    );
+                    suppressed_logged = true;
+                }
+                v
+            }
             None => {
-                if detection.confidence >= cfg.detection.confidence_threshold {
+                if above {
                     // Require sustained signal for min_duration_secs before auto-starting,
                     // so a 2-second notification ping doesn't trigger a recording.
-                    let since = meeting_since.get_or_insert_with(std::time::Instant::now);
+                    let since = meeting_since.get_or_insert_with(|| {
+                        if active.is_none() {
+                            tracing::info!(
+                                "meeting candidate: waiting {}s of sustained signal before recording",
+                                cfg.detection.min_duration_secs
+                            );
+                        }
+                        std::time::Instant::now()
+                    });
                     since.elapsed().as_secs() >= cfg.detection.min_duration_secs
                 } else {
-                    meeting_since = None;
+                    if let Some(since) = meeting_since.take() {
+                        if active.is_none() {
+                            tracing::info!(
+                                "meeting candidate dropped after {}s (needed {}s)",
+                                since.elapsed().as_secs(),
+                                cfg.detection.min_duration_secs
+                            );
+                        }
+                    }
                     false
                 }
             }
@@ -101,85 +222,148 @@ async fn main() -> anyhow::Result<()> {
 
         if should_record && active.is_none() {
             tracing::info!(
-                "starting recording, detected platform = {:?} (confidence {}, reasons: {})",
+                "starting recording, detected platform = {:?} (confidence {}, force={:?}, reasons: {})",
                 detection.platform,
                 detection.confidence,
+                force,
                 detection.reasons.join("; ")
             );
-            match recorder::start(&cfg.recording, detection.platform.clone()).await {
+            match recorder::start(
+                &cfg.recording,
+                detection.platform.clone(),
+                detection.confidence,
+            )
+            .await
+            {
                 Ok(rec) => {
-                    if cfg.general.notify_on_start_stop {
-                        let _ = notify_rust::Notification::new()
-                            .summary("Meeting recording started")
-                            .body(&format!(
-                                "Platform: {}",
-                                detection
-                                    .platform
-                                    .clone()
-                                    .unwrap_or_else(|| "unknown".into())
-                            ))
-                            .show();
+                    {
+                        let mut st = shared.lock().unwrap();
+                        st.recording = true;
+                        st.current_platform = detection.platform.clone();
                     }
-                    let mut st = shared.lock().unwrap();
-                    st.recording = true;
-                    st.current_platform = detection.platform.clone();
                     active = Some(rec);
+                    if cfg.general.notify_on_start_stop {
+                        notify(
+                            "Meeting recording started",
+                            &format!(
+                                "Platform: {}",
+                                detection.platform.as_deref().unwrap_or("unknown")
+                            ),
+                        )
+                        .await;
+                    }
                 }
                 Err(e) => tracing::error!("failed to start recording: {e:#}"),
             }
         } else if !should_record && active.is_some() {
+            tracing::info!(
+                "stopping recording (confidence {}, force={:?}, reasons: {})",
+                detection.confidence,
+                force,
+                detection.reasons.join("; ")
+            );
             let rec = active.take().unwrap();
-            let started_at = rec.started_at;
-            let platform = rec.platform.clone();
-            tracing::info!("stopping recording");
-            match recorder::stop(rec).await {
-                Ok(path) => {
-                    let ended_at = chrono::Local::now();
-                    let duration = (ended_at - started_at).num_seconds();
-
-                    let calendar_title = if cfg.calendar.provider != "none" {
-                        calendar::current_event_title(&cfg.calendar)
-                            .await
-                            .unwrap_or(None)
-                    } else {
-                        None
-                    };
-
-                    let meta = pipeline::RecordingMetadata {
-                        started_at,
-                        ended_at,
-                        duration_secs: duration,
-                        platform: platform.clone(),
-                        confidence: detection.confidence,
-                        calendar_event_title: calendar_title,
-                        audio_file: path.clone(),
-                    };
-                    if let Ok(meta_path) = pipeline::write_metadata(&path, &meta) {
-                        pipeline::run_hooks(&cfg.pipeline, &path, &meta_path).await;
-                    }
-
-                    {
-                        let mut st = shared.lock().unwrap();
-                        st.recording = false;
-                        st.current_platform = None;
-                        let _ = st.stats.record(platform.clone(), duration);
-                    }
-
-                    if cfg.general.notify_on_start_stop {
-                        let _ = notify_rust::Notification::new()
-                            .summary("Meeting recording saved")
-                            .body(&format!(
-                                "{} ({}s) -> {:?}",
-                                platform.unwrap_or_else(|| "unknown".into()),
-                                duration,
-                                path.file_name().unwrap_or_default()
-                            ))
-                            .show();
-                    }
-                }
-                Err(e) => tracing::error!("failed to stop recording cleanly: {e:#}"),
-            }
+            finish_recording(&cfg, &shared, rec).await;
             meeting_since = None;
         }
+    }
+}
+
+/// Stops ffmpeg, writes metadata, runs pipeline hooks, updates stats and notifies.
+async fn finish_recording(cfg: &Config, shared: &SharedState, rec: ActiveRecording) {
+    let started_at = rec.started_at;
+    let confidence = rec.confidence;
+    let platform = rec.platform.clone();
+    let result = recorder::stop(rec).await;
+
+    {
+        let mut st = shared.lock().unwrap();
+        st.recording = false;
+        st.current_platform = None;
+    }
+
+    let path = match result {
+        Ok(path) => path,
+        Err(e) => {
+            tracing::error!("failed to stop recording cleanly: {e:#}");
+            return;
+        }
+    };
+
+    let ended_at = chrono::Local::now();
+    let duration = (ended_at - started_at).num_seconds();
+    tracing::info!(
+        "recording finished: {:?}, {}s, platform {:?}",
+        path,
+        duration,
+        platform
+    );
+
+    let calendar_title = if cfg.calendar.provider != "none" {
+        match calendar::current_event_title(&cfg.calendar).await {
+            Ok(t) => {
+                tracing::info!("calendar cross-check ({}): {:?}", cfg.calendar.provider, t);
+                t
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "calendar cross-check ({}) failed: {e:#}",
+                    cfg.calendar.provider
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let meta = pipeline::RecordingMetadata {
+        started_at,
+        ended_at,
+        duration_secs: duration,
+        platform: platform.clone(),
+        confidence,
+        calendar_event_title: calendar_title,
+        audio_file: path.clone(),
+    };
+    match pipeline::write_metadata(&path, &meta) {
+        Ok(meta_path) => pipeline::run_hooks(&cfg.pipeline, &path, &meta_path).await,
+        Err(e) => tracing::error!("failed to write metadata for {:?}: {e:#}", path),
+    }
+
+    if let Err(e) = shared
+        .lock()
+        .unwrap()
+        .stats
+        .record(platform.clone(), duration)
+    {
+        tracing::warn!("failed to update stats: {e:#}");
+    }
+
+    if cfg.general.notify_on_start_stop {
+        notify(
+            "Meeting recording saved",
+            &format!(
+                "{} ({}s) -> {:?}",
+                platform.as_deref().unwrap_or("unknown"),
+                duration,
+                path.file_name().unwrap_or_default()
+            ),
+        )
+        .await;
+    }
+}
+
+/// Desktop notification via the async API. The blocking `.show()` must NOT be used here:
+/// ksni pulls in zbus's tokio integration, so notify-rust's blocking call does a `block_on`
+/// inside the tokio runtime and panics ("Cannot start a runtime from within a runtime").
+async fn notify(summary: &str, body: &str) {
+    if let Err(e) = notify_rust::Notification::new()
+        .summary(summary)
+        .body(body)
+        .show_async()
+        .await
+    {
+        tracing::warn!("desktop notification failed: {e}");
     }
 }

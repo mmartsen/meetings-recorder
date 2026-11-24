@@ -111,6 +111,23 @@ systemctl --user daemon-reload
 systemctl --user enable --now meeting-recorder.service
 ```
 
+## Logs
+
+Logs go to two places:
+
+- **stderr** (so `journalctl --user -u meeting-recorder -f` when running as a service), at the
+  level set by `RUST_LOG` (default `info`).
+- **a daily-rotated file** in `~/.local/state/meeting-recorder/logs/meeting-recorder.YYYY-MM-DD.log`
+  (14 days kept), at `info,meeting_recorder=debug` by default. You can override this with
+  `MEETING_RECORDER_FILE_LOG`, using the same syntax as `RUST_LOG`.
+
+At `info`, every detection state change is logged with its confidence, its reasons and the
+current mic/audio streams. That covers meeting candidates, candidates that drop out before
+`min_duration_secs`, start/stop, ffmpeg pid/exit status/output size, and force-override
+changes. So "why didn't this call get recorded?" can usually be answered from one log. At
+`debug` you also get every audio-stream change. At `trace` you get every tick and raw
+`pactl subscribe` event. Panics are written to the file log with a backtrace.
+
 ## Configuration
 
 Edit `~/.config/meeting-recorder/config.toml`. Key sections:
@@ -152,6 +169,7 @@ is on you.
 ```
 src/
   main.rs        - wires everything together: detection loop, recorder lifecycle, tray thread
+  logging.rs     - tracing setup: stderr + rotating file log, panic hook
   system_info.rs - logs session type, desktop environment, and tool availability at startup
   audio.rs       - pactl-based mic/app-audio snapshot + subscribe watcher
   window.rs      - active window titles (wmctrl) for browser-based meeting detection
