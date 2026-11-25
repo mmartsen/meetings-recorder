@@ -223,6 +223,10 @@ After each recording is saved, every hook in `[pipeline]` runs in order as:
   `notify = false` under `[pipeline]`.
 - Hooks are killed if the app stops mid-run (service restart, logout). Re-run them by hand
   on the recording if needed.
+- The bundled transcription hooks skip a recording whose transcript files (every format in
+  `--formats`) already exist, so re-running a hook, or having both enabled, never transcribes
+  (or pays for) the same call twice. Pass `--force` to redo one. Transcripts are only moved
+  into place once complete, so a killed run doesn't leave a half-written file behind.
 - Because hooks run in order, later hooks can use earlier hooks' output (e.g. a summarizer
   that reads the `.txt` transcript).
 

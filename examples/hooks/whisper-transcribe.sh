@@ -13,9 +13,11 @@
 #   --threads N           CPU threads                                        (default: nproc)
 #   --formats LIST        comma-separated: txt,srt,vtt,json                  (default: txt,srt)
 #   --min-seconds N       skip recordings shorter than this                  (default: 10)
+#   --force               transcribe again even if the transcript files already exist
 #
 # Can also be run by hand to (re)transcribe an old recording:
 #   whisper-transcribe.sh --model small rec.opus rec.opus.json
+# Recordings whose requested formats all exist already are skipped (see --force).
 set -euo pipefail
 
 backend=auto
@@ -24,8 +26,9 @@ language=auto
 threads=$(nproc 2>/dev/null || echo 4)
 formats=txt,srt
 min_seconds=10
+force=0
 
-usage() { sed -n '2,18p' "$0" >&2; exit 2; }
+usage() { sed -n '2,20p' "$0" >&2; exit 2; }
 
 while [[ $# -gt 2 ]]; do
   case "$1" in
@@ -35,6 +38,7 @@ while [[ $# -gt 2 ]]; do
     --threads) threads=$2; shift 2 ;;
     --formats) formats=$2; shift 2 ;;
     --min-seconds) min_seconds=$2; shift 2 ;;
+    --force) force=1; shift ;;
     *) echo "unknown option: $1" >&2; usage ;;
   esac
 done
@@ -52,6 +56,32 @@ if [[ -n $duration && $duration -lt $min_seconds ]]; then
   exit 0
 fi
 
+dir=$(dirname "$audio")
+name=$(basename "$audio")
+base="$dir/${name%.*}"
+
+# One run per recording at a time (a pipeline run and a manual re-run, or both hooks), keyed
+# on the resolved path so relative and absolute invocations share the lock.
+key=$(realpath "$audio" | sha1sum | cut -c1-16)
+exec 8>"${XDG_RUNTIME_DIR:-/tmp}/meeting-recorder-transcribe-$key.lock"
+flock 8
+
+# Already transcribed? Outputs are only ever moved into place complete, so existing,
+# non-empty files mean a previous run finished.
+if [[ $force -eq 0 ]]; then
+  missing=0
+  IFS=, read -ra want_fmts <<<"$formats"
+  for f in "${want_fmts[@]}"; do [[ -s $base.$f ]] || missing=1; done
+  if [[ $missing -eq 0 ]]; then
+    echo "skipping $name: already transcribed ($formats exist; use --force to redo)"
+    exit 0
+  fi
+fi
+
+# Copy into place via a temp name in the same directory, then rename: a killed run never
+# leaves a half-written transcript that the check above would mistake for a finished one.
+place() { cp "$1" "$2.partial.$$" && mv -f "$2.partial.$$" "$2"; }
+
 if [[ $backend == auto ]]; then
   if have whisper-cli || have whisper-cpp; then backend=whisper.cpp
   elif have whisper-ctranslate2; then backend=faster-whisper
@@ -62,10 +92,6 @@ if [[ $backend == auto ]]; then
   fi
 fi
 
-dir=$(dirname "$audio")
-name=$(basename "$audio")
-base="$dir/${name%.*}"
-
 # One transcription at a time: Whisper saturates the CPU/GPU, and two calls can end close
 # together.
 lock="${XDG_RUNTIME_DIR:-/tmp}/meeting-recorder-whisper.lock"
@@ -73,6 +99,10 @@ exec 9>"$lock"
 flock 9
 
 echo "transcribing $name with $backend (model $model, language $language)"
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+out="$work/${name%.*}"
 
 case "$backend" in
   whisper.cpp)
@@ -89,8 +119,7 @@ case "$backend" in
       exit 1
     fi
     # whisper.cpp wants 16 kHz mono WAV; recordings are Opus/MP3.
-    wav=$(mktemp --suffix=.wav)
-    trap 'rm -f "$wav"' EXIT
+    wav="$work/audio.wav"
     ffmpeg -nostdin -v error -y -i "$audio" -ar 16000 -ac 1 -c:a pcm_s16le "$wav"
     flags=()
     IFS=, read -ra fmts <<<"$formats"
@@ -100,7 +129,7 @@ case "$backend" in
         *) echo "unsupported format: $f" >&2; exit 2 ;;
       esac
     done
-    "$bin" -m "$model_file" -f "$wav" -l "$language" -t "$threads" -np "${flags[@]}" -of "$base"
+    "$bin" -m "$model_file" -f "$wav" -l "$language" -t "$threads" -np "${flags[@]}" -of "$out"
     ;;
 
   faster-whisper|openai)
@@ -108,13 +137,10 @@ case "$backend" in
     have "$bin" || { echo "$bin not found on PATH" >&2; exit 1; }
     lang_args=()
     [[ $language == auto ]] || lang_args=(--language "$language")
-    # Both CLIs write <name-without-ext>.<fmt> into --output_dir. Write all formats once,
-    # then drop the ones not asked for (cheaper than one Whisper run per format).
+    # Both CLIs write <name-without-ext>.<fmt> into --output_dir. Write all formats once
+    # (cheaper than one Whisper run per format); only the requested ones are placed below.
     "$bin" "$audio" --model "$model" --threads "$threads" "${lang_args[@]}" \
-      --output_dir "$dir" --output_format all
-    for f in txt srt vtt tsv json; do
-      [[ ,$formats, == *,$f,* ]] || rm -f "$base.$f"
-    done
+      --output_dir "$work" --output_format all
     ;;
 
   *) echo "unknown backend: $backend" >&2; usage ;;
@@ -122,6 +148,9 @@ esac
 
 written=()
 for f in txt srt vtt json; do
-  if [[ -f $base.$f ]]; then written+=("$base.$f"); fi
+  [[ ,$formats, == *,$f,* ]] || continue
+  [[ -f $out.$f ]] || { echo "Whisper produced no .$f output" >&2; exit 1; }
+  place "$out.$f" "$base.$f"
+  written+=("$base.$f")
 done
 echo "done: ${written[*]}"

@@ -19,6 +19,7 @@
 #   --chunk-minutes N     split audio into N-minute pieces (keeps uploads under 25 MB;
 #                         0 = never split)                                  (default: 20)
 #   --min-seconds N       skip recordings shorter than this                 (default: 10)
+#   --force               transcribe (and pay) again even if the transcript files exist
 #   --formats LIST        comma-separated: txt,srt,vtt                      (default: txt)
 #                         srt/vtt need segment timestamps (verbose_json), which whisper-1 and
 #                         whisper-large-v3* have but gpt-*-transcribe models don't; with them,
@@ -26,6 +27,7 @@
 #
 # Can also be run by hand to (re)transcribe an old recording:
 #   cloud-transcribe.sh --provider groq rec.opus rec.opus.json
+# Recordings whose requested formats all exist already are skipped (see --force).
 set -euo pipefail
 
 provider=openai
@@ -37,8 +39,9 @@ prompt=
 chunk_minutes=20
 min_seconds=10
 formats=txt
+force=0
 
-usage() { sed -n '2,28p' "$0" >&2; exit 2; }
+usage() { sed -n '2,30p' "$0" >&2; exit 2; }
 
 while [[ $# -gt 2 ]]; do
   case "$1" in
@@ -51,6 +54,7 @@ while [[ $# -gt 2 ]]; do
     --chunk-minutes) chunk_minutes=$2; shift 2 ;;
     --min-seconds) min_seconds=$2; shift 2 ;;
     --formats) formats=$2; shift 2 ;;
+    --force) force=1; shift ;;
     *) echo "unknown option: $1" >&2; usage ;;
   esac
 done
@@ -105,6 +109,32 @@ if [[ -n $duration && $duration -lt $min_seconds ]]; then
   echo "skipping $(basename "$audio"): ${duration}s < --min-seconds $min_seconds"
   exit 0
 fi
+
+dir=$(dirname "$audio")
+name=$(basename "$audio")
+base="$dir/${name%.*}"
+
+# One run per recording at a time (a pipeline run and a manual re-run, or both hooks), keyed
+# on the resolved path so relative and absolute invocations share the lock.
+key=$(realpath "$audio" | sha1sum | cut -c1-16)
+exec 8>"${XDG_RUNTIME_DIR:-/tmp}/meeting-recorder-transcribe-$key.lock"
+flock 8
+
+# Already transcribed? Outputs are only ever moved into place complete, so existing,
+# non-empty files mean a previous run finished.
+if [[ $force -eq 0 ]]; then
+  missing=0
+  IFS=, read -ra want_fmts <<<"$formats"
+  for f in "${want_fmts[@]}"; do [[ -s $base.$f ]] || missing=1; done
+  if [[ $missing -eq 0 ]]; then
+    echo "skipping $name: already transcribed ($formats exist; use --force to redo)"
+    exit 0
+  fi
+fi
+
+# Copy into place via a temp name in the same directory, then rename: a killed run never
+# leaves a half-written transcript that the check above would mistake for a finished one.
+place() { cp "$1" "$2.partial.$$" && mv -f "$2.partial.$$" "$2"; }
 
 key_file=${key_file:-$config_dir/$provider.key}
 if [[ -f $key_file ]]; then
@@ -192,8 +222,6 @@ fi
 prompt_args=()
 if [[ -n $prompt ]]; then prompt_args=(--form-string "prompt=$prompt"); fi
 
-name=$(basename "$audio")
-base="$(dirname "$audio")/${name%.*}"
 chunks=("$work"/chunk_*.ogg)
 echo "transcribing $name with $provider/$model (${#chunks[@]} chunk(s))"
 
@@ -240,6 +268,6 @@ fi
 # Move results into place only now, so a failed run never overwrites an existing transcript.
 written=()
 for f in txt srt vtt; do
-  if want "$f"; then mv "$work/transcript.$f" "$base.$f"; written+=("$base.$f"); fi
+  if want "$f"; then place "$work/transcript.$f" "$base.$f"; written+=("$base.$f"); fi
 done
 echo "done: ${written[*]}"
