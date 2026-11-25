@@ -75,9 +75,9 @@ pub fn detect(snapshot: &AudioSnapshot, cfg: &DetectionConfig) -> Detection {
                 .collect();
             titles.extend(window::all_window_titles());
             'outer: for title in &titles {
-                let lower = title.to_lowercase();
+                let lower = normalize_title(title);
                 for tm in &cfg.browser_meeting_titles {
-                    if lower.contains(&tm.title_match.to_lowercase()) {
+                    if lower.contains(&normalize_title(&tm.title_match)) {
                         platform = Some(tm.platform.clone());
                         confidence += 40;
                         reasons.push(format!(
@@ -103,6 +103,18 @@ pub fn detect(snapshot: &AudioSnapshot, cfg: &DetectionConfig) -> Detection {
         confidence: confidence.clamp(0, 100) as u8,
         reasons,
     }
+}
+
+/// Lowercase and fold dash variants to ASCII '-': Meet's tab title switched from
+/// "Meet - X" to "Meet – X" (en-dash), which silently broke the "meet - " pattern.
+fn normalize_title(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{2010}'..='\u{2015}' | '\u{2212}' => '-',
+            c => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
 }
 
 fn matches_app(stream: &crate::audio::StreamInfo, needle: &str) -> bool {
@@ -133,6 +145,18 @@ mod tests {
             mic_users: vec![ff("Meet - Finance & Data Catch up")],
             audio_producers: vec![ff("Meet - Finance & Data Catch up")],
         };
+        let d = detect(&snap, &cfg);
+        assert_eq!(d.platform.as_deref(), Some("Google Meet"));
+        assert!(d.confidence >= cfg.confidence_threshold, "{d:?}");
+    }
+
+    #[test]
+    fn detects_meet_with_en_dash_title() {
+        let snap = AudioSnapshot {
+            mic_users: vec![ff("Meet \u{2013} Weekly Sync")],
+            audio_producers: vec![ff("Meet \u{2013} Weekly Sync")],
+        };
+        let cfg = Config::default().detection;
         let d = detect(&snap, &cfg);
         assert_eq!(d.platform.as_deref(), Some("Google Meet"));
         assert!(d.confidence >= cfg.confidence_threshold, "{d:?}");
