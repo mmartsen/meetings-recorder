@@ -218,6 +218,9 @@ After each recording is saved, every hook in `[pipeline]` runs in order as:
 - A hook that fails or can't be started is logged with its stderr. If it has
   `required = true`, the hooks after it are skipped for that recording.
 - Each hook's start, duration and exit status are in the log (`grep hook` in the log file).
+- A desktop notification is shown when each hook finishes ("<name> done") or fails
+  ("<name> failed", with the last lines of its stderr). Turn this off with
+  `notify = false` under `[pipeline]`.
 - Hooks are killed if the app stops mid-run (service restart, logout). Re-run them by hand
   on the recording if needed.
 - Because hooks run in order, later hooks can use earlier hooks' output (e.g. a summarizer

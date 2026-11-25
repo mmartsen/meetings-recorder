@@ -392,10 +392,15 @@ const DESKTOP_ENTRY: &str = "meeting-recorder";
 /// ksni pulls in zbus's tokio integration, so notify-rust's blocking call does a `block_on`
 /// inside the tokio runtime and panics ("Cannot start a runtime from within a runtime").
 async fn notify(summary: &str, body: &str) {
+    notify_with_urgency(summary, body, notify_rust::Urgency::Normal).await
+}
+
+pub(crate) async fn notify_with_urgency(summary: &str, body: &str, urgency: notify_rust::Urgency) {
     if let Err(e) = notify_rust::Notification::new()
         .appname("Meeting Recorder")
         .icon(icons::IDLE)
         .hint(notify_rust::Hint::DesktopEntry(DESKTOP_ENTRY.into()))
+        .urgency(urgency)
         .summary(summary)
         .body(body)
         .show_async()

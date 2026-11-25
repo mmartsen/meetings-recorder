@@ -69,6 +69,13 @@ pub struct PipelineConfig {
     /// so the user can bolt on Whisper, a diarizer, a summarizer, an upload script, etc,
     /// entirely outside this codebase.
     pub hooks: Vec<PipelineHook>,
+    /// Show a desktop notification when each hook finishes or fails.
+    #[serde(default = "default_true")]
+    pub notify: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,6 +190,7 @@ impl Default for Config {
             },
             pipeline: PipelineConfig {
                 enabled: false,
+                notify: true,
                 hooks: vec![
                     // Example (pipeline is disabled by default): Whisper transcription via the
                     // wrapper script ./install.sh installs. See README "Transcription with
