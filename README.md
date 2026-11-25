@@ -329,7 +329,7 @@ on `PATH`, etc.).
 If you'd rather not run Whisper locally, `install.sh` also installs
 `~/.local/share/meeting-recorder/hooks/cloud-transcribe.sh`
 ([source](examples/hooks/cloud-transcribe.sh)). It sends the recording to a cloud
-speech-to-text API and writes `<recording>.txt` next to it. It uses only `curl` and `ffmpeg`
+speech-to-text API and writes `<recording>.txt` (optionally `.srt`/`.vtt`) next to it. It uses only `curl` and `ffmpeg`
 (plus `jq` or `python3` to read the response).
 
 > **Privacy:** this uploads the audio of everyone on the call to a third party. Make sure the
@@ -344,11 +344,18 @@ It works with any provider that offers an OpenAI-compatible `/audio/transcriptio
 |---|---|---|---|
 | `openai` | `gpt-transcribe` | `whisper-1` (older, deprecated) | [platform.openai.com](https://platform.openai.com/api-keys) |
 | `groq` | `whisper-large-v3-turbo` (fast, cheap) | `whisper-large-v3` (more accurate) | [console.groq.com](https://console.groq.com/keys) |
+| `openrouter` | `openai/gpt-transcribe` | `openai/whisper-1`, `openai/gpt-4o-mini-transcribe` | [openrouter.ai](https://openrouter.ai/settings/keys) |
 | `custom` | set `--model` | anything the server offers | depends on the server |
 
 `custom` with `--base-url` covers other OpenAI-compatible services and self-hosted servers
 (e.g. a Whisper server on another machine in your network). Model names and prices change;
 check the provider's docs.
+
+OpenRouter model names carry a vendor prefix (`openai/...`); its chat-only audio models
+(Gemini, `gpt-audio`) don't work on this endpoint. OpenRouter refuses audio requests while
+the account balance is under $0.50 (HTTP 402). In a test on a 53-minute call,
+`openai/gpt-transcribe` took ~80 s and cost ~$0.24, and `openai/whisper-1` took ~3 min and
+cost ~$0.32.
 
 Claude and most chat LLMs can't take audio input, so they can't do the transcription step.
 They are good at the next step: summarizing the `.txt` transcript. Add that as another hook
@@ -360,13 +367,13 @@ Put the key in a file only you can read. Don't put it in `config.toml`, because 
 arguments are visible in `ps`:
 
 ```bash
-install -m 600 /dev/null ~/.config/meeting-recorder/openai.key   # or groq.key, custom.key
+install -m 600 /dev/null ~/.config/meeting-recorder/openai.key   # or groq.key, openrouter.key, custom.key
 $EDITOR ~/.config/meeting-recorder/openai.key                     # paste the key, save
 ```
 
 The script reads `~/.config/meeting-recorder/<provider>.key` by default (override with
-`--api-key-file`). Without a key file it falls back to `OPENAI_API_KEY`, `GROQ_API_KEY` or
-`TRANSCRIBE_API_KEY` in the service's environment. The key is passed to `curl` through a
+`--api-key-file`). Without a key file it falls back to `OPENAI_API_KEY`, `GROQ_API_KEY`,
+`OPENROUTER_API_KEY` or `TRANSCRIBE_API_KEY` in the service's environment. The key is passed to `curl` through a
 private temporary file, never on the command line.
 
 ### 2. Enable the hook
@@ -389,7 +396,7 @@ Hook options (in `args`):
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--provider` | `openai` | `openai`, `groq` or `custom` |
+| `--provider` | `openai` | `openai`, `groq`, `openrouter` or `custom` |
 | `--model` | per provider | see the table above |
 | `--base-url` | per provider | API base URL; required for `custom` (e.g. `http://192.168.1.10:8000/v1`) |
 | `--api-key-file` | `~/.config/meeting-recorder/<provider>.key` | file containing only the key |
@@ -397,6 +404,16 @@ Hook options (in `args`):
 | `--prompt` | none | names and jargon to help spelling, e.g. `"Kubernetes, PostgreSQL, Anna Kowalski"` |
 | `--chunk-minutes` | `20` | split the audio into pieces of this length (`0` = don't split) |
 | `--min-seconds` | `10` | skip recordings shorter than this |
+| `--formats` | `txt` | comma-separated: `txt`, `srt`, `vtt` (see below) |
+
+**Timestamps (`srt`/`vtt`).** These are built from the API's `verbose_json` segments, with
+each chunk's segments shifted by the chunk's position in the recording, so a 1-hour call gets
+one continuous `.srt`. With `srt` or `vtt` the `.txt` also changes, to one segment per line.
+Only Whisper models return segments: `whisper-1` (OpenRouter: `openai/whisper-1`) and Groq's
+`whisper-large-v3*`. The `gpt-*-transcribe` models return plain text only, so asking them for
+`srt`/`vtt` fails before anything is uploaded. You can't have both best accuracy
+(`gpt-transcribe`) and timestamps from one run; for timestamps use
+`args = ["--provider", "openrouter", "--model", "openai/whisper-1", "--formats", "txt,srt"]`.
 
 **Upload size limits.** OpenAI and Groq's free tier accept at most 25 MB per request. The
 script re-encodes the audio to 16 kHz mono Opus (speech doesn't need more), which is roughly
@@ -466,7 +483,7 @@ packaging/
 install.sh       - build + per-user install / update / uninstall
 examples/hooks/
   whisper-transcribe.sh    - local Whisper transcription hook (whisper.cpp / faster-whisper / openai)
-  cloud-transcribe.sh      - cloud transcription hook (OpenAI / Groq / any OpenAI-compatible API)
+  cloud-transcribe.sh      - cloud transcription hook (OpenAI / Groq / OpenRouter / any OpenAI-compatible API)
 ```
 
 The tray PNGs are rendered from the SVGs. After editing an SVG, regenerate them:
