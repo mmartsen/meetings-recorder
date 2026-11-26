@@ -275,6 +275,25 @@ curl -L -o ~/.local/share/whisper.cpp/models/ggml-base.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
 ```
 
+Also download the Silero voice activity detection (VAD) model (under 1 MB). With it, the hook
+cuts out silence before Whisper sees it. Without it, Whisper tends to invent text in quiet
+stretches ("Дякую за перегляд!", "Thanks for watching", fake subtitle credits) or repeat one
+line for minutes:
+
+```bash
+curl -L -o ~/.local/share/whisper.cpp/models/ggml-silero-v5.1.2.bin \
+  https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
+```
+
+The hook uses it automatically when the file is there (`--vad auto`), and always passes
+`-mc 0 -sns` to whisper.cpp, which stops repetition loops. In a test on a 3-minute clip, VAD
+removed all invented lines and halved the run time.
+
+**GPU (whisper.cpp).** On Arch/Manjaro, `sudo pacman -S ggml-vulkan` adds a Vulkan backend
+that `whisper-cli` uses automatically, including on integrated AMD graphics. On a Ryzen 7
+5800U's built-in Radeon, `large-v3-turbo` ran about 4× faster than on all CPU cores, and a
+39-minute call took ~6 minutes with VAD (38 minutes CPU-only, without VAD).
+
 faster-whisper and openai-whisper download models automatically the first time they're used.
 
 The hook finds the binary on `PATH`. The systemd service's `PATH` may not include
@@ -311,6 +330,9 @@ Hook options (in `args`):
 | `--threads` | all cores | CPU threads |
 | `--formats` | `txt,srt` | any of `txt,srt,vtt,json` |
 | `--min-seconds` | `10` | skip recordings shorter than this |
+| `--force` | off | transcribe again even if the transcript files already exist |
+| `--vad` | `auto` | whisper.cpp only: `on`, `off`, or `auto` (on when the VAD model file exists) |
+| `--vad-model` | `<models dir>/ggml-silero-v5.1.2.bin` | path to the Silero VAD model |
 
 Choosing a model: `base` is fast and fine for clear English. `small` is a good default for
 meetings. `medium` and `large-v3-turbo` are noticeably better with accents, crosstalk and

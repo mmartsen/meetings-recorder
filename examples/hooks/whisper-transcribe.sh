@@ -14,6 +14,11 @@
 #   --formats LIST        comma-separated: txt,srt,vtt,json                  (default: txt,srt)
 #   --min-seconds N       skip recordings shorter than this                  (default: 10)
 #   --force               transcribe again even if the transcript files already exist
+#   --vad auto|on|off     whisper.cpp only: run voice activity detection first, so silence
+#                         never reaches Whisper (stops it inventing "thanks for watching" /
+#                         subtitle credits). auto = on if the VAD model exists (default: auto)
+#   --vad-model PATH      Silero VAD model for whisper.cpp
+#                         (default: <models dir>/ggml-silero-v5.1.2.bin)
 #
 # Can also be run by hand to (re)transcribe an old recording:
 #   whisper-transcribe.sh --model small rec.opus rec.opus.json
@@ -27,8 +32,10 @@ threads=$(nproc 2>/dev/null || echo 4)
 formats=txt,srt
 min_seconds=10
 force=0
+vad=auto
+vad_model=
 
-usage() { sed -n '2,20p' "$0" >&2; exit 2; }
+usage() { sed -n '2,25p' "$0" >&2; exit 2; }
 
 while [[ $# -gt 2 ]]; do
   case "$1" in
@@ -39,6 +46,8 @@ while [[ $# -gt 2 ]]; do
     --formats) formats=$2; shift 2 ;;
     --min-seconds) min_seconds=$2; shift 2 ;;
     --force) force=1; shift ;;
+    --vad) vad=$2; shift 2 ;;
+    --vad-model) vad_model=$2; shift 2 ;;
     *) echo "unknown option: $1" >&2; usage ;;
   esac
 done
@@ -98,7 +107,7 @@ lock="${XDG_RUNTIME_DIR:-/tmp}/meeting-recorder-whisper.lock"
 exec 9>"$lock"
 flock 9
 
-echo "transcribing $name with $backend (model $model, language $language)"
+echo "transcribing $name with $backend (model $model, language $language, vad $vad)"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -107,21 +116,37 @@ out="$work/${name%.*}"
 case "$backend" in
   whisper.cpp)
     bin=$(command -v whisper-cli || command -v whisper-cpp) || { echo "whisper-cli not found" >&2; exit 1; }
+    models_dir=${WHISPER_CPP_MODELS:-${XDG_DATA_HOME:-$HOME/.local/share}/whisper.cpp/models}
     model_file=$model
-    if [[ ! -f $model_file ]]; then
-      models_dir=${WHISPER_CPP_MODELS:-${XDG_DATA_HOME:-$HOME/.local/share}/whisper.cpp/models}
-      model_file="$models_dir/ggml-$model.bin"
-    fi
+    [[ -f $model_file ]] || model_file="$models_dir/ggml-$model.bin"
     if [[ ! -f $model_file ]]; then
       echo "whisper.cpp model not found: $model_file" >&2
       echo "download it with:" >&2
       echo "  mkdir -p '$(dirname "$model_file")' && curl -L -o '$model_file' https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$model.bin" >&2
       exit 1
     fi
+    # -mc 0: don't feed earlier text back in as context, which is what lets Whisper fall into
+    # repeating one line for minutes. -sns: suppress non-speech tokens.
+    flags=(-mc 0 -sns)
+    vad_model=${vad_model:-$models_dir/ggml-silero-v5.1.2.bin}
+    case "$vad" in
+      auto|on)
+        if [[ -f $vad_model ]]; then
+          flags+=(--vad -vm "$vad_model")
+        elif [[ $vad == on ]]; then
+          echo "VAD model not found: $vad_model" >&2
+          echo "download it with:" >&2
+          echo "  curl -L -o '$vad_model' https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin" >&2
+          exit 1
+        else
+          echo "note: no VAD model at $vad_model; silent parts may produce invented text (see README)"
+        fi ;;
+      off) ;;
+      *) echo "--vad must be auto, on or off" >&2; exit 2 ;;
+    esac
     # whisper.cpp wants 16 kHz mono WAV; recordings are Opus/MP3.
     wav="$work/audio.wav"
     ffmpeg -nostdin -v error -y -i "$audio" -ar 16000 -ac 1 -c:a pcm_s16le "$wav"
-    flags=()
     IFS=, read -ra fmts <<<"$formats"
     for f in "${fmts[@]}"; do
       case "$f" in
