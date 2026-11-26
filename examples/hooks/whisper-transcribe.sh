@@ -75,12 +75,12 @@ key=$(realpath "$audio" | sha1sum | cut -c1-16)
 exec 8>"${XDG_RUNTIME_DIR:-/tmp}/meeting-recorder-transcribe-$key.lock"
 flock 8
 
-# Already transcribed? Outputs are only ever moved into place complete, so existing,
-# non-empty files mean a previous run finished.
+# Already transcribed? Outputs are only ever moved into place complete, so an existing file
+# means a previous run finished (an empty one is a recording with no speech in it).
 if [[ $force -eq 0 ]]; then
   missing=0
   IFS=, read -ra want_fmts <<<"$formats"
-  for f in "${want_fmts[@]}"; do [[ -s $base.$f ]] || missing=1; done
+  for f in "${want_fmts[@]}"; do [[ -e $base.$f ]] || missing=1; done
   if [[ $missing -eq 0 ]]; then
     echo "skipping $name: already transcribed ($formats exist; use --force to redo)"
     exit 0
